@@ -1,0 +1,17 @@
+# 密钥只在环境变量，.env 永不入库
+.env
+
+# 运行时数据（被管理项目内的记忆目录）
+.memory/
+
+# Python 构建与缓存产物
+__pycache__/
+*.egg-info/
+.pytest_cache/
+*.py[cod]
+build/
+dist/
+.venv/
+
+# macOS
+.DS_Store

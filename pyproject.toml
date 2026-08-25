@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "eventmem"
+version = "0.1.0"
+description = "基于事件闭环的 agent 记忆系统：不可变存储、可重建索引、线索触发的联想召回"
+requires-python = ">=3.10"
+dependencies = [
+    "httpx>=0.27",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+eventmem = "eventmem.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/eventmem"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "llm: 需要真实 LLM 端点与 env key 的集成测试，CI 默认跳过",
+]
+addopts = "-m 'not llm'"
