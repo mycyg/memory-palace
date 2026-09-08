@@ -2,25 +2,41 @@
 
 **中文** · [English](README.en.md) · [日本語](README.ja.md)
 
-MemoryPalace 是面向工具协作、陪伴与知识积累的单用户记忆系统。它用一个 Python 核心管理来源、事实、经历、关系、承诺、知识片段和连续性状态，可通过插件、CLI、管理台、HTTP、MCP 与 SDK 使用。
+MemoryPalace 是面向工具协作、陪伴与知识积累的单用户记忆系统。它保存来源、事实、经历、关系、承诺、知识片段和连续性状态，可通过插件、CLI、管理台、HTTP、MCP 与 SDK 使用。
 
 ![MemoryPalace 总架构](docs/diagrams/overview.png)
 
 ## 功能
 
-- **来源与写入**：保存来源快照和内容哈希，通过去重、事务与修订检查写入数据，并用持久任务队列记录处理进度。模型请求失败时，已保存的来源和进度会保留。
+- **来源与写入**：保存原始来源，自动去重并记录处理进度。模型请求失败时，已保存的来源和进度会保留。
 - **记忆类型**：记录情景、事实与状态、程序性经验、角色关系、共同经历、承诺与提醒，也保存日记、自述、知识和 checkpoint。项目、角色、知识库及现实／虚构领域可以分别设置范围。
-- **召回**：用精确线索、FTS5、LanceDB 向量、视觉向量和关系查询获得候选，再融合排序。支持读取历史时点的记录；返回结果前检查纠正后的有效状态，按上下文预算选择内容，并在不同宿主之间去重。
-- **后台整理**：模型生成抽取与冲突处理建议。后台执行增量 Leiden 聚类，管理主题家族与叙事卷。摘要、日记和画像保留来源引用，整理结果支持修订与回滚。
+- **召回**：支持按精确线索、全文、语义、图片和关系查找记忆，也可以读取历史时点的记录。返回内容会核对纠正后的有效状态，遵守上下文预算，并在不同宿主之间去重。
+- **后台整理**：从来源中抽取记忆，提出冲突处理建议，并整理主题家族与叙事卷。摘要、日记和画像保留来源引用，整理结果支持修订与回滚。
 - **文件与多模态**：接收 PDF、DOCX、PPTX、XLSX、Markdown、HTML、CSV、图片和音视频，保留页码、段落、表格位置、时间片段及附件位置。
-- **主动联系**：按角色设置提醒、承诺跟进、纪念日、检查和问候，可配置时区、安静时段、频率与确认方式。待发内容可以延后或取消，回调队列和投递记录持久保存。
-- **管理台**：查看处理进度，通过虚拟滚动浏览记忆、追溯来源并比较修订。管理台还提供时间线、日历、二维／三维关系图、知识与附件、日记、召回实验室，以及联系策略和数据维护设置。
+- **主动联系**：按角色设置提醒、承诺跟进、纪念日、检查和问候，可配置时区、安静时段、频率与确认方式。待发内容可以延后或取消，重启后仍保留待发内容和投递记录。
+- **管理台**：查看处理进度，浏览记忆、追溯来源并比较修订。管理台还提供时间线、日历、二维／三维关系图、知识与附件、日记、召回实验室，以及联系策略和数据维护设置。
 
 模型生成的内容会明确标记。模型推断、用户明确表达的内容和客观操作分别记录；同一来源被重复引用时，仍只计为一份独立证据。
 
+### 写入与纠正
+
+![写入与纠正](docs/diagrams/write-correct.png)
+
+### 召回与上下文
+
+![召回与上下文](docs/diagrams/recall-context.png)
+
+### 后台整理
+
+![后台整理](docs/diagrams/background.png)
+
+### 主动联系
+
+![主动联系](docs/diagrams/proactive-contact.png)
+
 ## 安装与启动
 
-从 GitHub 仓库安装；此版本没有自动发布到 PyPI 或 npm。需要 Python 3.11–3.13、Node.js 22 和 [uv](https://docs.astral.sh/uv/)：
+需要 Python 3.11–3.13、Node.js 22 和 [uv](https://docs.astral.sh/uv/)：
 
 ```sh
 git clone https://github.com/mycyg/memory-palace.git
@@ -33,7 +49,7 @@ npm run build --prefix console
 uv run eventmem console
 ```
 
-管理台和服务的默认地址是 `http://127.0.0.1:8319`，私有数据默认保存在 `~/.memorypalace`。也可以用 `eventmem serve` 启动服务，用 `--root /private/path` 指定独立的数据目录。服务检查本地凭据、Host 和 Origin。实际记忆、附件、密钥和运行日志不进入仓库。
+管理台和服务的默认地址是 `http://127.0.0.1:8319`，私有数据默认保存在 `~/.memorypalace`。也可以用 `eventmem serve` 启动服务，用 `--root /private/path` 指定独立的数据目录。
 
 在管理台为抽取、冲突判断、摘要、重排、embedding、视觉与 ASR 等角色配置模型。可以使用兼容 API 或本地端点，也可以让多个角色复用同一模型。密钥通过环境变量名称引用。某类模型尚未配置时，相关任务会显示待配置，原始来源仍会保存。
 
@@ -45,7 +61,7 @@ uv run eventmem console
 | `dsh-eventmem` | 将 DeepSeek Harness 事件接入统一服务；可显式启用旧版模式回退 |
 | HTTP `/v1` | 来源、记忆、纠正、关系、连续性、任务、维护、调度与观测 |
 | MCP | stdio 与 Streamable HTTP；工具式访问 |
-| Python / TypeScript SDK | 共用从 OpenAPI 生成的契约，并提供回调去重接口 |
+| Python / TypeScript SDK | 调用记忆服务，并对回调去重 |
 | `eventmem` CLI | 服务、管理台、MCP、写入／召回、迁移、备份、调度与评估 |
 
 MCP 提供工具式访问。自动采集和被动注入需要接入宿主事件；使用插件时，本地服务需要保持运行。
@@ -61,7 +77,7 @@ node examples/v1/tool.mjs
 
 ## 实测
 
-验收环境：**10 核 CPU、64 GiB 内存、SSD、macOS arm64、Python 3.13.14**。数据为 10 万条记忆、100 万个 1,024 维知识向量及对应 SQLite 记录。向量采用固定种子的 256 分量高斯混合分布，查询使用独立样本。
+测试环境：**10 核 CPU、64 GiB 内存、SSD、macOS arm64、Python 3.13.14**。数据包括 10 万条记忆和 100 万个 1,024 维合成知识向量，查询使用独立样本。
 
 | 指标 | 实测 |
 |---|---:|
@@ -73,7 +89,7 @@ node examples/v1/tool.mjs
 | 峰值 RSS（含构建） | 2.75 GiB |
 | 并发去重 | 10 个会话，400 次请求，200 个唯一来源 |
 
-表中时延不含外部模型请求，真实语料上的效果仍需单独验证。[测试条件、原始结果与复现命令](docs/performance.md)分别列出了首次查询、常见词查询、后台导入、模型请求及回放结果。与 SCARLETT 的功能对照仅依据架构图；没有可运行实现的性能对照，因此不作性能优劣判断。
+表中时延不含外部模型请求，真实语料上的效果仍需单独验证。[测试详情](docs/performance.md)。
 
 ## 迁移与数据维护
 
@@ -87,14 +103,12 @@ uv run eventmem restore /private/backup.tar.gz --root /another/empty/root
 
 ## 文档与限制
 
-- [架构与数据语义](docs/architecture.md) · [功能覆盖矩阵](docs/coverage.md) · [配置、插件、迁移与运维](docs/operations.md)
-- 流程图：[写入与纠正](docs/diagrams/write-correct.svg) · [召回与上下文](docs/diagrams/recall-context.svg) · [后台整理](docs/diagrams/background.svg) · [主动联系](docs/diagrams/proactive-contact.svg)
-- 每张图都提供[可编辑 Mermaid、SVG 和 PNG](docs/diagrams/)。[OpenAPI 契约](contracts/openapi.json)、SDK、插件、管理台、媒体处理和文档生成均由 CI 检查。
+[架构与数据语义](docs/architecture.md) · [配置、插件、迁移与运维](docs/operations.md)
 
 快速全文检索先按范围筛选，再对最近匹配的最多 400 条记录排序。深度模式支持对完整匹配集排序，也支持模型检索。
 
 PDF 默认解析原生文本，扫描页需要视觉端点。完整的本地布局模型可以选配。视觉检索需要兼容的多模态 embedding 端点。外部模型、重型解析和语料差异都会影响端到端时延与效果。
 
-支持在 macOS／Linux 上进行单用户本地部署。此版本不包含多用户账户、实时摄像头／麦克风采集和专用聊天平台客户端。
+支持在 macOS／Linux 上进行单用户本地部署。
 
 [MIT License](LICENSE)
