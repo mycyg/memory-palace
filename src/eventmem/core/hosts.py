@@ -8,7 +8,7 @@ from .db import digest, dumps
 from .models import RecallRequest, Scope, SourceInput
 
 
-def handle(engine, event, payload):
+def handle(engine, event, payload, *, receipt_only=False):
     """Host event normalization. Hosts provide observations, never recall rankings."""
     session = str(payload.get("session_id") or payload.get("sessionId") or "default")
     cwd = str(Path(payload.get("cwd") or ".").resolve())
@@ -18,12 +18,25 @@ def handle(engine, event, payload):
         transcript = payload.get("transcript_path")
         if transcript and event in {"end", "compact"}:
             capture_transcript(engine, Path(transcript), session, scope)
+        boundary_event = event
+        if receipt_only or (
+            payload.get("host") == "claude-code" and event == "compact"
+        ):
+            # PreCompact and offline replay save state without accounting for
+            # context that the host has not actually injected.
+            boundary_event = "checkpoint" if event != "end" else "end"
+        elif (
+            payload.get("host") == "claude-code"
+            and event == "start"
+            and payload.get("source") in {"compact", "clear"}
+        ):
+            boundary_event = "compact"
         return boundary(
             engine,
             SessionBoundary(
                 session=session,
                 scope=scope,
-                event=event,
+                event=boundary_event,
                 scenario=scenario,
                 command_id=payload.get("command_id")
                 or digest([session, event, payload]),
@@ -81,7 +94,7 @@ def handle(engine, event, payload):
                 extract=bool(payload.get("extract", event == "message")),
             )
         )
-    if event in {"tool", "pre_action"}:
+    if event in {"tool", "pre_action"} and not receipt_only:
         if isinstance(arguments, dict):
             cue = " ".join(
                 str(arguments.get(key, ""))

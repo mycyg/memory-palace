@@ -570,7 +570,7 @@ class Worker:
                 # A replay cannot inject into a past host context; only receipt
                 # events are replayed. Startup/compact are fetched again live.
                 if data["event"] in {"tool", "message", "boundary", "end", "compact"}:
-                    handle(self.engine, data["event"], data["payload"])
+                    handle(self.engine, data["event"], data["payload"], receipt_only=True)
                 path.unlink(missing_ok=True)
             except Deleted:
                 path.unlink(missing_ok=True)

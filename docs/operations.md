@@ -34,7 +34,7 @@ A role configuration update makes waiting tasks retryable. The jobs view exposes
 
 ## Host connections
 
-Claude Code: load the checkout as a plugin with `claude --plugin-dir /absolute/path/to/memory-palace`; its `hooks/hooks.json` handles session start, prompts, pre/post tool use, compaction and exit. The plugin launcher selects its checkout `.venv` or `EVENTMEM_PYTHON`. See the [Claude Code plugin reference](https://code.claude.com/docs/en/plugins-reference). The legacy hook modules remain importable for existing configurations; migrate to the bridge to use the 1.0 core.
+Claude Code: load the checkout as a plugin with `claude --plugin-dir /absolute/path/to/memory-palace`; its `hooks/hooks.json` handles session start, prompts, pre/post tool use, compaction and exit. The plugin launcher selects its checkout `.venv` or `EVENTMEM_PYTHON`. See the [Claude Code plugin reference](https://code.claude.com/docs/en/plugins-reference). PreCompact captures the transcript and checkpoint; the subsequent SessionStart with source `compact` restores the context budget and injects the current working set. See [hook lifecycle semantics](https://code.claude.com/docs/en/hooks#sessionstart). Offline spool replay records receipt without consuming the live injection budget. The legacy hook modules remain importable for existing configurations; migrate to the bridge to use the 1.0 core.
 
 DeepSeek Harness: build `dsh-plugin` with `npm ci`, `npm run build`, then install the local `dsh-eventmem` bundle using the harness plugin workflow. The default transport calls the service. `legacyMode: true` retains the old file-based adapter for rollback. User and assistant messages retain their distinct source authority; injected plugin messages do not become user statements.
 
@@ -45,6 +45,8 @@ MCP stdio:
 ```
 
 Streamable HTTP is available at `http://127.0.0.1:8319/mcp/` with the local bearer token. MCP by itself provides explicit tool reads and writes; it does not observe a host's conversation or inject passive context automatically.
+
+Record lists contain bounded previews; open a record to read its content in cursor-based segments. The correction editor reads all segments at a consistent revision before editing.
 
 ## Migrate, recover and delete
 

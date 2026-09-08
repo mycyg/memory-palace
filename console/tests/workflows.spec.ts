@@ -83,3 +83,21 @@ test('backup download and deletion preview use public operations',async({page})=
  await drawer.getByRole('button',{name:'永久删除…',exact:true}).click();await expect(drawer.locator('.delete-preview')).toContainText('1 条记录');
  await drawer.getByRole('button',{name:'确认永久删除',exact:true}).click();await expect(drawer).not.toBeVisible();await expect(page.getByRole('button').filter({hasText:title})).toHaveCount(0);
 });
+
+test('correction loads a complete long record before saving',async({page})=>{
+ const headers={Authorization:'Bearer test-console-local'};
+ const title='Long correction '+Date.now();
+ const content='Original complete paragraph. '.repeat(800)+'PRESERVE THE FINAL SENTENCE';
+ const receipt=await (await page.request.post('/v1/sources',{headers,data:{namespace:'browser-long',key:title,title,text:content}})).json();
+ const source=await (await page.request.get(`/v1/sources/${receipt.id}`,{headers})).json();
+ await page.locator('nav').getByRole('button',{name:'记忆浏览',exact:true}).click();
+ await page.getByLabel('搜索当前范围',{exact:true}).fill(title);
+ await page.getByRole('button').filter({hasText:title}).click();
+ const drawer=page.getByRole('dialog',{name:'记忆详情'});
+ await drawer.getByRole('button',{name:'纠正',exact:true}).click();
+ await expect(drawer.getByLabel('更正后的内容')).toHaveValue(content);
+ await drawer.getByLabel('更正后的内容').fill('Corrected opening. '+content);
+ await drawer.getByRole('button',{name:'保存纠正'}).click();
+ const first=await (await page.request.get(`/v1/memories/${source.record_ids[0]}?length=32000&budget=32000`,{headers})).json();
+ expect(first.content).toBe('Corrected opening. '+content);
+});

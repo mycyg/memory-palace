@@ -70,7 +70,7 @@ An additional [single-source extraction probe](benchmarks/model-ingestion.json) 
 
 ## Correctness and product checks
 
-Local checks passed: **382 Python tests** (three optional legacy real-model tests deselected), **136 DeepSeek Harness tests**, **3 TypeScript SDK tests**, and **5 browser workflows**. The separate configured-model replay above exercises real model requests.
+Local checks passed: **385 Python tests** (three optional legacy real-model tests deselected), **136 DeepSeek Harness tests**, **3 TypeScript SDK tests**, and **6 browser workflows**. The separate configured-model replay above exercises real model requests.
 
 Tests exercise revision compare-and-swap, source deduplication, SQLite contention, lease expiry, process termination after a remote callback effect, cancellation, model failure, stale vector revisions, deletion and rebuild, historical queries, role/project separation, source citation, document versions and shared context budgets. A remote effect followed by process exit leaves a durable `sending` entry; an unacknowledged non-idempotent delivery becomes `uncertain` on restart. Acknowledgment reconciles that occurrence without resuming canceled work.
 

@@ -571,3 +571,20 @@ def test_narrative_candidate_limit_excludes_generated_records_before_selection(
             c.execute("SELECT COUNT(*) FROM records WHERE kind='diary'").fetchone()[0]
             == 1
         )
+
+
+def test_record_lists_bound_content_and_metadata_without_altering_source(tmp_path):
+    import json
+
+    e = Engine(tmp_path)
+    text = "A long record. " * 10000
+    source = e.receive(
+        SourceInput(
+            namespace="list", key="large", text=text, metadata={"large": "x" * 100000}
+        )
+    )
+    result = e.list_records(Scope())
+    assert len(json.dumps(result)) < 6000
+    item = result["items"][0]
+    assert item["preview"] and item["content_length"] == len(text)
+    assert e.get(e.source(source["id"])["record_ids"][0])["content"] == text

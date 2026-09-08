@@ -238,3 +238,81 @@ def test_sdk_contract_types_and_environment_root(tmp_path, monkeypatch):
     with Client(transport=httpx.MockTransport(request)) as client:
         assert client.health()["status"] == "ok"
     assert seen == ["Bearer private-local-fixture"]
+
+
+def test_claude_compaction_restores_via_session_start(service):
+    engine, url = service
+    engine.receive(
+        SourceInput(
+            namespace="compact-test",
+            key="1",
+            text="Keep the verified release artifact.",
+            kind="procedure",
+        )
+    )
+    env = dict(os.environ, EVENTMEM_HOME=str(engine.db.root), EVENTMEM_URL=url)
+    payload = {
+        "session_id": "compact-cycle",
+        "scope": {"project": "personal"},
+        "cwd": str(engine.db.root),
+    }
+
+    def hook(event, data):
+        result = subprocess.run(
+            [sys.executable, "-m", "eventmem.hooks.bridge", event],
+            input=json.dumps(data),
+            text=True,
+            capture_output=True,
+            env=env,
+            check=True,
+        )
+        return json.loads(result.stdout) if result.stdout.strip() else {}
+
+    initial = hook("start", payload | {"source": "startup"})
+    assert (
+        "verified release artifact"
+        in initial["hookSpecificOutput"]["additionalContext"]
+    )
+    assert hook("compact", payload | {"trigger": "auto"}) == {}
+    restored = hook("start", payload | {"source": "compact"})
+    assert restored["hookSpecificOutput"]["hookEventName"] == "SessionStart"
+    assert (
+        "verified release artifact"
+        in restored["hookSpecificOutput"]["additionalContext"]
+    )
+
+
+def test_offline_host_replay_does_not_consume_injection_budget(tmp_path):
+    from eventmem.core.jobs import Worker
+
+    engine = Engine(tmp_path)
+    engine.receive(
+        SourceInput(
+            namespace="spool-test",
+            key="1",
+            text="Restore the verified artifact",
+            kind="procedure",
+        )
+    )
+    spool = tmp_path / "host-spool"
+    spool.mkdir()
+    path = spool / "event.json"
+    path.write_text(
+        json.dumps(
+            {
+                "event": "tool",
+                "payload": {
+                    "session_id": "offline",
+                    "scope": {"project": "personal"},
+                    "tool_name": "Bash",
+                    "tool_input": {"command": "restore verified artifact"},
+                    "tool_response": "success",
+                },
+            }
+        )
+    )
+    Worker(engine).replay_hosts()
+    assert not path.exists()
+    assert engine.overview()["sources"] == 2
+    with engine.db.connect() as conn:
+        assert not conn.execute("SELECT 1 FROM sessions WHERE id='offline'").fetchone()

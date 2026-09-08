@@ -595,8 +595,32 @@ class Engine:
                 + " ORDER BY id LIMIT ?",
                 values + [limit + 1],
             ).fetchall()
+        items = []
+        for row in rows[:limit]:
+            data = json.loads(row["data"])
+            data.update(content_length=len(data["content"]), preview=True)
+            data["content"] = data["content"][:2000]
+            data["attributes"] = {}
+            data["locator"] = {
+                key: value
+                for key, value in data.get("locator", {}).items()
+                if key
+                in {
+                    "type",
+                    "page",
+                    "row",
+                    "start_seconds",
+                    "end_seconds",
+                    "char_start",
+                    "char_end",
+                }
+            }
+            data["source_count"] = len(data["source_ids"])
+            data["source_ids"] = data["source_ids"][:20]
+            data["evidence_ids"] = data.get("evidence_ids", [])[:20]
+            items.append(data)
         return {
-            "items": [json.loads(r["data"]) for r in rows[:limit]],
+            "items": items,
             "cursor": rows[limit - 1]["id"] if len(rows) > limit else None,
         }
 

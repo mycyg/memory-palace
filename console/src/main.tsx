@@ -1007,7 +1007,20 @@ function App() {
                 <button
                   key={key}
                   className={drawerTab === key ? "selected" : ""}
-                  onClick={() => setDrawerTab(key)}
+                  onClick={() => {
+                    if (key !== "correct") { setDrawerTab(key); return; }
+                    void run(async () => {
+                      let complete: RecordItem & { content: string } = {...selected, content:selected.content ?? ""};
+                      while (complete.cursor) {
+                        const piece = await api.call("read_memory", {path:{record_id:complete.id},query:{offset:complete.cursor}});
+                        if (piece.revision !== selected.revision) throw new Error("记忆已更新，请重新打开后纠正。");
+                        complete = {...piece,content:complete.content + piece.content};
+                      }
+                      setSelected(complete);
+                      setRevisionText(complete.content);
+                      setDrawerTab("correct");
+                    });
+                  }}
                 >
                   {label}
                 </button>
