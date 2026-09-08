@@ -1,16 +1,6 @@
-/**
- * eventmem 的 dsh 宿主适配（B-lite）：TS 侧只做热路径查表与事件转写，
- * `.memory/` 的写入与整理全部 spawn 给 Python 侧的 `eventmem` CLI。
- *
- * 订阅的扩展点（DSH-ADAPTER §2.2）：
- * - `agent/session-start` — 注入工作集，`source === 'compact'` 的重启同样注入；
- * - `tools/result` — 纯观察的锚点浮现，并把机械事实写进 feed；
- * - `session/event` — `todo/write` 的意图浮现，turn/step 边界写进 feed；
- * - `session/flush` — 被 await 的落盘检查点；
- * - `agent/status` — 连续 idle 达阈值后经 `agent.runMaintenance` 拉起抽取与整理；
- * - `ctx.effect` 的 async disposer — 卸载兜底 flush。
- *
- * @module dsh-eventmem
+/** MemoryPalace 1.0 DeepSeek Harness adapter.
+ * Default: durable event spool and common Python service for capture, recall,
+ * context and lifecycle. legacyMode explicitly selects the file-based adapter.
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -26,6 +16,7 @@ import type { LogTarget } from './log.js'
 import { MemoryPaths } from './memory.js'
 import { asTodos, blocksToText } from './narrow.js'
 import { EventmemRuntime } from './runtime.js'
+import { ServiceRuntime } from './service-runtime.js'
 import type { InjectFn } from './runtime.js'
 
 export { Config } from './config.js'
@@ -55,7 +46,7 @@ const EVENTMEM_SOURCE: MessageSource = { kind: 'plugin', plugin: name, form: 're
  */
 export function apply(ctx: Context, config: Config): void {
   if (!config.enabled) return
-  const runtime = new EventmemRuntime(config)
+  const runtime = config.legacyMode ? new EventmemRuntime(config) : new ServiceRuntime(config)
   const agents = new Map<string, Agent>()
 
   const injectVia = (agent: Agent): InjectFn => (text: string) => {
@@ -87,11 +78,18 @@ export function apply(ctx: Context, config: Config): void {
   // ---- 会话启动：注入工作集 ----
   // source 取值为 'startup' | 'resume' | 'clear' | 'compact'；compact 后会重新触发，
   // 因此这一条同时承担了 compact 之后的重新供给。
-  ctx.on('agent/session-start', ({ agent }) => {
+  ctx.on('agent/session-start', ({ agent, source }) => {
     guard(logAt(() => agent.session), 'session-start', () => {
       agents.set(agent.session.id, agent)
-      runtime.sessionStart(agent.session.id, cwdOf(agent.session), injectVia(agent))
+      if (runtime instanceof ServiceRuntime) runtime.sessionStart(agent.session.id, cwdOf(agent.session), injectVia(agent), source)
+      else runtime.sessionStart(agent.session.id, cwdOf(agent.session), injectVia(agent))
     })
+  })
+
+  if (runtime instanceof ServiceRuntime) ctx.on('tools/execute', async (exec, next) => {
+    const agent = exec.agent
+    if (agent) await guardAsync(logAt(() => agent.session), 'pre-action', () => runtime.preAction(agent.session.id, cwdOf(agent.session), exec.name, exec.arguments, injectVia(agent)))
+    return next()
   })
 
   // ---- 工具结果：纯观察浮现 ＋ feed 落盘 ----
@@ -118,6 +116,12 @@ export function apply(ctx: Context, config: Config): void {
   ctx.on('session/event', (session: Session, event: SessionEvent) => {
     guard(logAt(() => session), 'session/event', () => {
       switch (event.type) {
+        case 'user/message':
+          if (runtime instanceof ServiceRuntime && event.data.source.kind === 'user') runtime.message(session.id, cwdOf(session), 'user', blocksToText(event.data.content), event.seq)
+          return
+        case 'assistant/message':
+          if (runtime instanceof ServiceRuntime) runtime.message(session.id, cwdOf(session), 'assistant', blocksToText(event.data.message.content), event.seq)
+          return
         case 'todo/write': {
           const agent = agentFor(session)
           if (agent === undefined) return
@@ -163,6 +167,7 @@ export function apply(ctx: Context, config: Config): void {
       void runtime.flush(sessionId).catch(() => undefined).then(() => {
         runtime.drop(sessionId)
         agents.delete(sessionId)
+        return runtime.flush(sessionId)
       })
     })
   })

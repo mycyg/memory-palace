@@ -12,7 +12,7 @@ from .recall import SurfaceHit
 from .schema import Anchors, Event, Kind, SchemaError, Status
 from .store import AlreadyClosed, EventNotFound, Store
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"
 
 __all__ = [
     "Anchors",

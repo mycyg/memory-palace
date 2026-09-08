@@ -1,0 +1,80 @@
+name: MemoryPalace checks
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - run: uv sync --frozen --extra dev --extra vector --extra graph
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --prefix sdk/typescript && npm run build --prefix sdk/typescript
+      - run: uv run pytest -q
+      - run: uv run python scripts/generate_contract.py && npm run generate --prefix sdk/typescript
+      - run: git diff --exit-code -- contracts src/eventmem/sdk sdk/typescript/src
+      - run: uv run eventmem evaluate --output replay.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: replay-${{ matrix.python }}
+          path: replay.json
+  media:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.13'
+      - run: uv sync --frozen --extra dev --extra all
+      - run: uv run pytest tests/test_extended_v1.py -q
+  clients:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.13'
+      - run: uv sync --frozen --extra dev --extra vector --extra graph
+      - run: npm ci --prefix dsh-plugin && npm run typecheck --prefix dsh-plugin && npm test --prefix dsh-plugin && npm run build --prefix dsh-plugin
+      - run: npm ci --prefix sdk/typescript && npm run build --prefix sdk/typescript && npm test --prefix sdk/typescript
+      - run: npm ci --prefix console && npm run build --prefix console
+      - run: npx --prefix console playwright install --with-deps chromium
+      - run: npm test --prefix console
+      - run: uv build
+      - run: uv run python scripts/check_wheel.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: console-and-wheel
+          path: |
+            console/test-results
+            dist/*.whl
+  diagrams:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm run docs:render
+      - run: node scripts/check-docs.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: architecture-diagrams
+          path: docs/diagrams
