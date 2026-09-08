@@ -20,17 +20,25 @@ Model-generated content is labeled as such. Inferences, explicit user statements
 
 ### Writing and corrections
 
+Memories need traceable sources and a way to accommodate later corrections. Explicit user statements are stored separately from model inferences; differences across projects, personas or time can coexist without overwriting records that remain valid within their own scope. Corrections update current reads while preserving revision history. If model processing fails, sources and completed progress remain available so unfinished work can resume.
+
 ![Writing and corrections](docs/diagrams/write-correct.png)
 
 ### Recall and context
+
+Recall prioritizes whether a memory applies to the current question and how much context the conversation can accommodate. Project, persona and time filters narrow the candidates before validity checks, reducing irrelevant or obsolete content in the context. Everyday interaction uses fast queries, with deeper searches available when relationships or history need further investigation. Results retain sources and read links so complete events or document sections can be consulted.
 
 ![Recall and context](docs/diagrams/recall-context.png)
 
 ### Background organization
 
+Long-term organization runs incrementally in the background as records change, to reduce its impact on current interaction. Topics, diaries and summaries retain citations to their sources. Classification and generated narratives do not raise a record's confirmation level or turn model inferences into user facts. When a source is corrected, affected derived content is marked unverified, and later reads still check its validity.
+
 ![Background organization](docs/diagrams/background.png)
 
 ### Active contact
+
+Users configure timing, frequency and content scope per role; quiet hours and confirmation requirements also govern sending. Before sending, the system rechecks whether the item has been completed, canceled or invalidated, so contact follows its current state. Until a policy and channel are configured, it only creates suggestions that can be previewed. If the channel cannot confirm delivery, the status remains uncertain for the user to review.
 
 ![Active contact](docs/diagrams/proactive-contact.png)
 
