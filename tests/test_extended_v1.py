@@ -392,7 +392,8 @@ Scheduler(Engine(sys.argv[1])).tick()
         assert c.execute("SELECT state FROM outbox").fetchone()[0] == "uncertain"
 
 
-def test_autonomous_greeting_requires_explicit_enabled_policy(tmp_path):
+def test_autonomous_greeting_requires_explicit_enabled_policy(tmp_path, monkeypatch):
+    monkeypatch.setattr("eventmem.core.scheduler.time.monotonic", lambda: 0.0)
     e = Engine(tmp_path)
     s = Scheduler(e)
     s.policy(
@@ -534,3 +535,39 @@ def test_replay_resume_checks_dataset_and_model_identity(tmp_path, monkeypatch):
     e.settings("models", {"answer": {"model": "changed"}})
     with pytest.raises(ValueError, match="different dataset or model"):
         evaluate(output, dataset, answer_engine=e)
+
+
+def test_narrative_candidate_limit_excludes_generated_records_before_selection(
+    tmp_path, monkeypatch
+):
+    e = Engine(tmp_path)
+    source = e.receive(
+        SourceInput(
+            namespace="narrative",
+            key="original",
+            text="The user explicitly enjoyed the garden walk.",
+        )
+    )
+    rid = e.source(source["id"])["record_ids"][0]
+    for i in range(101):
+        e.receive(
+            SourceInput(
+                namespace="narrative",
+                key=str(i),
+                text="A generated description",
+                authority="model",
+            )
+        )
+
+    def summarize(self, role, instruction, payload, **kwargs):
+        assert [r["id"] for r in payload["records"]] == [rid]
+        return {"content": "The user enjoyed the garden walk.", "evidence_ids": [rid]}
+
+    monkeypatch.setattr(Providers, "json", summarize)
+    e.enqueue("diary", {"scope": Scope().model_dump()}, "diary-candidates")
+    drain(e)
+    with e.db.connect() as c:
+        assert (
+            c.execute("SELECT COUNT(*) FROM records WHERE kind='diary'").fetchone()[0]
+            == 1
+        )

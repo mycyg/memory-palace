@@ -18,7 +18,7 @@ from .models import ContactPolicy, ScheduleInput, Scope, now
 class Scheduler:
     def __init__(self, engine):
         self.engine = engine
-        self.last_automatic = 0.0
+        self.last_automatic = float("-inf")
 
     def policy(self, policy: ContactPolicy):
         with self.engine.db.connect(write=True) as conn:

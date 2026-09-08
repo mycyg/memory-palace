@@ -16,7 +16,7 @@ class Worker:
         self.owner = uuid.uuid4().hex
         self.lease_seconds = lease_seconds
         self.stopped = threading.Event()
-        self.last_maintenance = 0.0
+        self.last_maintenance = float("-inf")
 
     def claim(self):
         if self.engine.interactive_until > time.monotonic():
@@ -412,7 +412,7 @@ class Worker:
             scope = Scope(**payload["scope"])
             with engine.db.connect() as conn:
                 rows = conn.execute(
-                    "SELECT data FROM records WHERE scope=? AND deleted=0 AND status='active' AND updated_at>=? ORDER BY updated_at DESC LIMIT 100",
+                    "SELECT data FROM records WHERE scope=? AND deleted=0 AND status='active' AND updated_at>=? AND json_extract(data,'$.generated')=0 ORDER BY updated_at DESC LIMIT 100",
                     (scope.key(), payload.get("since", "")),
                 ).fetchall()
             records = [
