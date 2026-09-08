@@ -1,4 +1,4 @@
-flowchart LR
+flowchart TD
     W["Committed source or revision"] --> DIRTY["Dirty records and dependencies"]
     DIRTY --> Q[("SQLite durable queue\nUnique key · dependencies · attempts")]
     Q --> LEASE["Claim lease + fencing token\nHeartbeat / crash recovery"]
