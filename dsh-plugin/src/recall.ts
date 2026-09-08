@@ -142,7 +142,7 @@ export function surface(
   const ranked: { id: string, weight: number, hits: number, line: string }[] = []
   for (const [eventId, hits] of overlap) {
     const head = readEventHead(paths.eventFile(eventId))
-    if (head === undefined) continue // 索引比存储旧时跳过，宁漏勿胀
+    if (head === undefined || head.status === 'superseded') continue
     ranked.push({
       id: head.id,
       weight: STATUS_WEIGHT[head.status] ?? 0,

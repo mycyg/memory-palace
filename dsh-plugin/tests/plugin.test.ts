@@ -105,7 +105,7 @@ afterEach(() => {
 describe('监听器注册', () => {
   it('订阅 DSH-ADAPTER §2.2 里的六个扩展点', () => {
     const h = harness()
-    apply(h.ctx, Config({}))
+    apply(h.ctx, Config({ legacyMode: true,}))
     for (const event of [
       'agent/session-start',
       'tools/result',
@@ -122,7 +122,7 @@ describe('监听器注册', () => {
 
   it('enabled 为 false 时一个监听器都不注册', () => {
     const h = harness()
-    apply(h.ctx, Config({ enabled: false }))
+    apply(h.ctx, Config({ legacyMode: true, enabled: false }))
     expect(h.listeners.size).toBe(0)
     expect(h.disposers).toHaveLength(0)
   })
@@ -132,7 +132,7 @@ describe('注入', () => {
   it('会话启动注入工作集，来源标记为 plugin/eventmem/recall', () => {
     writeFileSync(join(project, '.memory', 'index', 'working-set.md'), '# 工作集\n\n- 一条\n', 'utf8')
     const h = harness()
-    apply(h.ctx, Config({}))
+    apply(h.ctx, Config({ legacyMode: true,}))
     const a = fakeAgent(SESSION, project)
     h.fire('agent/session-start', { agent: a.agent, source: 'startup' })
 
@@ -144,7 +144,7 @@ describe('注入', () => {
   it('compact 后的重启同样注入', () => {
     writeFileSync(join(project, '.memory', 'index', 'working-set.md'), '# 工作集\n', 'utf8')
     const h = harness()
-    apply(h.ctx, Config({}))
+    apply(h.ctx, Config({ legacyMode: true,}))
     const a = fakeAgent(SESSION, project)
     h.fire('agent/session-start', { agent: a.agent, source: 'compact' })
     expect(a.injected).toHaveLength(1)
@@ -154,7 +154,7 @@ describe('注入', () => {
     writeEvent(project, { id: '2026-08-01_090000', status: 'done', intent: 'A', outcome: '改端口区间' })
     writeAnchors(project, { 'intent:端口': ['2026-08-01_090000'], 'intent:口冲': ['2026-08-01_090000'] })
     const h = harness()
-    apply(h.ctx, Config({}))
+    apply(h.ctx, Config({ legacyMode: true,}))
     const a = fakeAgent(SESSION, project)
     h.fire('agent/session-start', { agent: a.agent, source: 'startup' })
     a.injected.length = 0
@@ -171,7 +171,7 @@ describe('注入', () => {
     writeEvent(project, { id: '2026-08-01_090000', status: 'done', intent: 'A', outcome: '改了 foo' })
     writeAnchors(project, { 'file:src/foo.py': ['2026-08-01_090000'] })
     const h = harness()
-    apply(h.ctx, Config({}))
+    apply(h.ctx, Config({ legacyMode: true,}))
     const a = fakeAgent(SESSION, project)
 
     h.fire(
@@ -184,7 +184,7 @@ describe('注入', () => {
 
   it('exec.agent 缺失时跳过本次浮现（R-5）', () => {
     const h = harness()
-    apply(h.ctx, Config({}))
+    apply(h.ctx, Config({ legacyMode: true,}))
     expect(() => {
       h.fire(
         'tools/result',
@@ -198,7 +198,7 @@ describe('注入', () => {
 describe('护栏纪律', () => {
   it('负载内部抛出时异常不外泄，且落到该项目的 eventmem-dsh.log', () => {
     const h = harness()
-    apply(h.ctx, Config({}))
+    apply(h.ctx, Config({ legacyMode: true,}))
     const a = fakeAgent(SESSION, project)
     const exec = {
       agent: a.agent,
@@ -216,7 +216,7 @@ describe('护栏纪律', () => {
 
   it('连会话都取不到时也不外泄异常', () => {
     const h = harness()
-    apply(h.ctx, Config({}))
+    apply(h.ctx, Config({ legacyMode: true,}))
     const broken = fakeAgent(SESSION, project, { broken: true })
 
     expect(() => { h.fire('agent/session-start', { agent: broken.agent, source: 'startup' }) }).not.toThrow()
@@ -230,7 +230,7 @@ describe('护栏纪律', () => {
 
   it('畸形负载不外泄异常', () => {
     const h = harness()
-    apply(h.ctx, Config({}))
+    apply(h.ctx, Config({ legacyMode: true,}))
     const cases: [string, unknown[]][] = [
       ['session/event', [{ id: SESSION, header: {} }, { type: 'todo/write', data: {} }]],
       ['session/event', [{ id: SESSION, header: { cwd: project } }, { type: '未知类型', data: null }]],
@@ -245,7 +245,7 @@ describe('护栏纪律', () => {
 
   it('session/flush 被 await 且异常不外泄', async () => {
     const h = harness()
-    apply(h.ctx, Config({}))
+    apply(h.ctx, Config({ legacyMode: true,}))
     await expect(h.fire('session/flush', { id: SESSION, header: { cwd: project } })).resolves.toBeUndefined()
     await expect(h.fire('session/flush', null)).resolves.toBeUndefined()
   })
@@ -255,7 +255,7 @@ describe('idle 去抖与整理调度', () => {
   it('连续 idle 达配置秒数才触发 runMaintenance', async () => {
     vi.useFakeTimers()
     const h = harness()
-    apply(h.ctx, Config({ idleDebounceSeconds: 30, pythonExecutable: '/nonexistent/python-xyz' }))
+    apply(h.ctx, Config({ legacyMode: true, idleDebounceSeconds: 30, pythonExecutable: '/nonexistent/python-xyz' }))
     const a = fakeAgent(SESSION, project)
 
     // 先制造 feed 内容，否则没有脏量不会触发
@@ -272,7 +272,7 @@ describe('idle 去抖与整理调度', () => {
   it('去抖窗口内转回 running 则取消', async () => {
     vi.useFakeTimers()
     const h = harness()
-    apply(h.ctx, Config({ idleDebounceSeconds: 30, pythonExecutable: '/nonexistent/python-xyz' }))
+    apply(h.ctx, Config({ legacyMode: true, idleDebounceSeconds: 30, pythonExecutable: '/nonexistent/python-xyz' }))
     const a = fakeAgent(SESSION, project)
     h.fire('session/event', { id: SESSION, header: { cwd: project } },
       { type: 'turn/end', seq: 1, time: 0, data: { turn: 1, reason: 'completed' } })
@@ -287,7 +287,7 @@ describe('idle 去抖与整理调度', () => {
   it('feed 无新内容时不触发整理', async () => {
     vi.useFakeTimers()
     const h = harness()
-    apply(h.ctx, Config({ idleDebounceSeconds: 1, pythonExecutable: '/nonexistent/python-xyz' }))
+    apply(h.ctx, Config({ legacyMode: true, idleDebounceSeconds: 1, pythonExecutable: '/nonexistent/python-xyz' }))
     const a = fakeAgent(SESSION, project)
     h.fire('agent/status', { agent: a.agent, status: 'idle' })
     await vi.advanceTimersByTimeAsync(5_000)
@@ -297,7 +297,7 @@ describe('idle 去抖与整理调度', () => {
   it('runMaintenance 同步抛出时只记日志', async () => {
     vi.useFakeTimers()
     const h = harness()
-    apply(h.ctx, Config({ idleDebounceSeconds: 1, pythonExecutable: '/nonexistent/python-xyz' }))
+    apply(h.ctx, Config({ legacyMode: true, idleDebounceSeconds: 1, pythonExecutable: '/nonexistent/python-xyz' }))
     const refusing = {
       session: { id: SESSION, header: { id: SESSION, cwd: project } },
       inject() { /* noop */ },
@@ -316,7 +316,7 @@ describe('idle 去抖与整理调度', () => {
 describe('卸载兜底', () => {
   it('disposer flush 掉排队中的 feed 写入', async () => {
     const h = harness()
-    apply(h.ctx, Config({}))
+    apply(h.ctx, Config({ legacyMode: true,}))
     h.fire('session/event', { id: SESSION, header: { cwd: project } },
       { type: 'turn/start', seq: 1, time: 0, data: { turn: 1 } })
 

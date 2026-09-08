@@ -1,0 +1,27 @@
+name: Reproducible scale benchmark
+on:
+  workflow_dispatch:
+    inputs:
+      scale:
+        description: 'full: 100k memories + 1m 1024-dimensional vectors'
+        type: choice
+        options: [smoke, full]
+        default: smoke
+permissions:
+  contents: read
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.13'
+      - run: uv sync --frozen --extra dev --extra vector
+      - run: uv run eventmem benchmark --scale '${{ inputs.scale }}' --root '${{ runner.temp }}/scale-data' --output scale.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scale-results
+          path: scale.json

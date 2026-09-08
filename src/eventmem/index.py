@@ -213,8 +213,13 @@ def rebuild_all(store: Store, paths: MemoryPaths, budget: Budget, now: datetime)
     L0 文件仍在，只是不再进倒排／project.md／BM25 语料／工作集。
     """
     paths.ensure()
+    authoritative_archive = paths.root / 'state' / 'archive-index.md'
+    if paths.archive_index.exists():
+        atomic_write(authoritative_archive, paths.archive_index.read_text(encoding='utf-8'))
+    elif authoritative_archive.exists():
+        atomic_write(paths.archive_index, authoritative_archive.read_text(encoding='utf-8'))
     archived = archived_ids(paths)
-    events = [e for e in store.iter_events() if e.id not in archived]
+    events = [e for e in store.iter_events() if e.id not in archived and e.status != 'superseded']
     states = load_lesson_states(paths)  # 先读旧状态，晋升/退休结果在重建中保留
     granularity = load_granularity(paths)
     salience = salience_scores(paths)
@@ -298,7 +303,10 @@ def load_archive_index(paths: MemoryPaths) -> dict[str, ArchiveRow]:
     try:
         raw = paths.archive_index.read_text(encoding="utf-8")
     except OSError:
-        return {}
+        try:
+            raw = (paths.root / 'state' / 'archive-index.md').read_text(encoding='utf-8')
+        except OSError:
+            return {}
     rows: dict[str, ArchiveRow] = {}
     for line in raw.splitlines():
         stripped = line.strip()
@@ -325,6 +333,7 @@ def write_archive_index(paths: MemoryPaths, rows: Mapping[str, ArchiveRow]) -> N
     lines = [ARCHIVE_INDEX_TITLE, ""]
     lines.extend(rows[event_id].line for event_id in sorted(rows))
     atomic_write(paths.archive_index, "\n".join(lines) + "\n")
+    atomic_write(paths.root / 'state' / 'archive-index.md', "\n".join(lines) + "\n")
 
 
 def append_archive_rows(paths: MemoryPaths, rows: Iterable[ArchiveRow]) -> int:

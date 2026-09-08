@@ -1,0 +1,19 @@
+flowchart TD
+    A["Reminder · commitment · anniversary\nCheck-in · greeting"] --> S[("Persistent schedule\nDue time · timezone · recurrence")]
+    S --> P["Role policy\nEnabled · channel · triggers · content scope\nQuiet hours · frequency · confirmation"]
+    P --> V["Recheck current memory and schedule\nCanceled? Completed? Expired? Scope changed?"]
+    V -- "invalid" --> C["Cancel pending delivery"]
+    V -- "valid" --> O[("Durable outbox\nStable delivery id")]
+    O --> M{"Policy and channel ready?"}
+    M -- "no" --> G["Suggestion and preview"]
+    M -- "confirmation required" --> U["User confirms, delays or cancels"]
+    U --> V
+    M -- "ready" --> CL["Commit sending claim\nRecheck again before callback"]
+    CL --> SEND["Authenticated host callback / webhook\nIdempotency-Key = delivery id"]
+    SEND --> ACK["Host transactionally deduplicates\nAcknowledgement recorded"]
+    SEND -- "timeout / crash" --> I{"Channel supports idempotency?"}
+    I -- "yes" --> RETRY["Bounded retry with the same id"]
+    RETRY --> V
+    I -- "no" --> UNKNOWN["Delivery uncertain\nReconciliation required before resending"]
+    ACK --> NEXT["Complete or schedule the next occurrence"]
+    NEXT --> S

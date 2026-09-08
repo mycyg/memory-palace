@@ -11,6 +11,7 @@ from dataclasses import replace
 from typing import Callable, Iterator
 
 from .paths import MemoryPaths, atomic_write
+from .locking import exclusive
 from .schema import (
     SALIENCE_PRIORS,
     Anchors,
@@ -52,9 +53,10 @@ class Store:
         """写入新事件；id 冲突时追加 -2、-3 后缀，返回最终 id（不修改入参对象）。"""
         if not e.id.strip():
             raise SchemaError("事件缺少 id，请先用 schema.new_id 生成")
-        final_id = self._free_id(e.id)
-        stored = e if final_id == e.id else replace(e, id=final_id)
-        atomic_write(self._paths.event_file(final_id), to_markdown(stored))
+        with exclusive(self._paths.root / 'store.lock'):
+            final_id = self._free_id(e.id)
+            stored = e if final_id == e.id else replace(e, id=final_id)
+            atomic_write(self._paths.event_file(final_id), to_markdown(stored))
         return final_id
 
     def read(self, event_id: str) -> Event:
@@ -172,11 +174,12 @@ class Store:
 
     def _rewrite(self, event_id: str, mutate: Callable[[Event], Event]) -> None:
         """读—改—原子写回；mutate 只允许返回改动了允许字段的副本。"""
-        current = self.read(event_id)
-        updated = mutate(current)
-        if updated.intent != current.intent or updated.body != current.body:
-            raise RuntimeError("不可变纪律：intent 与 body 不允许被修改")
-        atomic_write(self._paths.event_file(event_id), to_markdown(updated))
+        with exclusive(self._paths.root / 'store.lock'):
+            current = self.read(event_id)
+            updated = mutate(current)
+            if updated.intent != current.intent or updated.body != current.body:
+                raise RuntimeError("不可变纪律：intent 与 body 不允许被修改")
+            atomic_write(self._paths.event_file(event_id), to_markdown(updated))
 
     def _free_id(self, base: str) -> str:
         """从 base 起找一个未被占用的 id。"""

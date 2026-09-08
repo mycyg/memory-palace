@@ -73,7 +73,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  rmSync(project, { recursive: true, force: true })
+  rmSync(project, { recursive: true, force: true, maxRetries: 3 })
 })
 
 describe('工具名映射', () => {

@@ -1,0 +1,60 @@
+from __future__ import annotations
+import json
+from .db import Conflict, dumps
+from .models import Scope
+from .retrieval import tokens
+
+
+def read_segment(
+    engine,
+    record_id,
+    *,
+    at=None,
+    known_at=None,
+    offset=0,
+    length=12000,
+    budget=4000,
+    session=None,
+):
+    if offset < 0 or not 1 <= length <= 32000 or not 1 <= budget <= 32000:
+        raise ValueError("Invalid read segment or token budget")
+    result = engine.get(record_id, at=at, known_at=known_at)
+    content = result["content"]
+    piece = content[offset : offset + length]
+    if tokens(piece) > budget:
+        lo, hi = 0, len(piece)
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if tokens(piece[:mid]) <= budget:
+                lo = mid
+            else:
+                hi = mid - 1
+        piece = piece[:lo]
+    count = tokens(piece)
+    if session:
+        with engine.db.connect(write=True) as conn:
+            row = conn.execute(
+                "SELECT * FROM sessions WHERE id=?", (session,)
+            ).fetchone()
+            scope = Scope(**result["scope"]).key()
+            if row and row["scope"] != scope:
+                raise Conflict("Session belongs to another scope")
+            state = (
+                json.loads(row["data"])
+                if row
+                else {"seen": {}, "used": 0, "resident": {}, "checkpoint": None}
+            )
+            state["seen"][record_id] = result["revision"]
+            state["used"] += count
+            conn.execute(
+                "INSERT INTO sessions VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data",
+                (session, scope, dumps(state)),
+            )
+        engine.feedback(record_id, "read", session)
+    result.update(
+        content=piece,
+        content_length=len(content),
+        tokens=count,
+        cursor=str(offset + len(piece)) if offset + len(piece) < len(content) else None,
+    )
+    return result

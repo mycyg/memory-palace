@@ -1,6 +1,6 @@
 {
   "name": "dsh-eventmem",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "eventmem host adapter for the DeepSeek Harness: event-based agent memory shared with the Python eventmem implementation",
   "type": "module",
   "main": "lib/index.js",

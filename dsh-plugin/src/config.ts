@@ -15,6 +15,8 @@ export type ToolRole = 'file' | 'error' | 'todo'
 
 /** 插件配置。 */
 export interface Config {
+  /** Explicit compatibility mode for an unmigrated .memory directory. */
+  legacyMode: boolean
   /** 总开关。关闭后所有监听器立即返回。 */
   enabled: boolean
   /** 单次浮现注入的最大行数（DESIGN §5 的 surface_k）。 */
@@ -97,6 +99,7 @@ export const DEFAULT_DELEGATION_TOOLS: string[] = ['task', 'subagent', 'agent']
  * 那些插件的字段用 `.required()`，没有默认值可退。
  */
 export const Config: z<Partial<Config>, Config> = z.object({
+  legacyMode: z.boolean().default(false).description('兼容旧 .memory 目录；迁移后关闭'),
   enabled: z.boolean().default(true).description('总开关'),
   surfaceK: z.natural().min(1).max(20).default(3).description('单次浮现注入的最大行数'),
   memoryDirName: z.string().default('.memory').description('记忆目录名，与 Python 版的格式契约'),

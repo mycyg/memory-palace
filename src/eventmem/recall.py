@@ -102,7 +102,9 @@ def surface(
         if _is_seen(event_id, seen, granularity):  # 组内已 seen 任一成员则整组去重
             continue
         try:
-            events.append((store.read(event_id), hits))
+            event = store.read(event_id)
+            if event.status != 'superseded':
+                events.append((event, hits))
         except (EventNotFound, SchemaError):
             continue  # 索引比存储旧时跳过，宁漏勿胀
     if not events:
@@ -281,7 +283,8 @@ def _hit_line(e: Event, granularity: Granularity | None = None, cue_file: str = 
     flat = " ".join(text.split())
     if len(flat) > LINE_CHARS:
         flat = flat[: LINE_CHARS - 1] + "…"
-    return f"[{e.id}] {flat}"
+    suffix = f" [superseded by {e.superseded_by}]" if e.status == 'superseded' else ''
+    return f"[{e.id}] {flat}{suffix}"
 
 
 def _flat(text: str) -> str:

@@ -108,7 +108,7 @@ def test_surface_orders_by_status_weight_done_over_abandoned_over_open(store: St
     assert [h.event_id for h in hits] == [e_done, e_abandoned, e_open]
 
 
-def test_surface_ranks_superseded_below_open(store: Store, paths, event_factory) -> None:
+def test_surface_excludes_superseded_from_current_context(store: Store, paths, event_factory) -> None:
     e_open = store.append(event_factory(status="open", anchors=Anchors(files=["shared.py"])))
     e_superseded = store.append(
         event_factory(
@@ -121,7 +121,7 @@ def test_surface_ranks_superseded_below_open(store: Store, paths, event_factory)
     rebuild_all(store, paths, Budget(), NOW)
 
     hits = surface("shared.py", "file", store, paths, Budget(surface_k=2), seen=set())
-    assert [h.event_id for h in hits] == [e_open, e_superseded]
+    assert [h.event_id for h in hits] == [e_open]
 
 
 # ---------------------------------------------------------------- search：BM25 相关性排序

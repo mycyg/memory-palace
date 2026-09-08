@@ -1124,16 +1124,29 @@ def extract_events(
     session_id: str,
     now: datetime,
 ) -> list[str]:
+    from .locking import exclusive
+    with exclusive(_paths_of(store).root / 'extract.lock'):
+        return _extract_events(transcript_path, store, client, session_id, now)
+
+
+def _extract_events(transcript_path, store, client, session_id, now):
     """从 transcript 抽取事件，返回新事件 id 列表。client 为 None 即纯机械模式。"""
     paths = _paths_of(store)
     transcript_path = Path(transcript_path)
     watermark = _read_watermark(paths, session_id)
+    model_path = _watermark_path(paths, session_id).with_name(_watermark_path(paths, session_id).name + '.model')
+    try:
+        model_watermark = max(0, int(model_path.read_text()))
+    except (OSError, ValueError):
+        model_watermark = 0
     harvest = scan_transcript(transcript_path, watermark, paths)
 
     if harvest.total_lines < watermark:  # transcript 被截断或替换：水位重置重扫
         watermark = 0
         harvest = scan_transcript(transcript_path, 0, paths)
-    if harvest.total_lines <= watermark:
+    if harvest.total_lines < model_watermark:
+        model_watermark = 0
+    if harvest.total_lines <= watermark and (client is None or harvest.total_lines <= model_watermark):
         return []  # 无新行
 
     existing: set[str] = set()
@@ -1163,11 +1176,13 @@ def extract_events(
         | {_norm(text) for text in delegated_intents}
     )
 
-    if client is not None and not harvest.is_empty():
+    model_harvest = scan_transcript(transcript_path, model_watermark, paths) if client is not None else harvest
+    if client is not None and not model_harvest.is_empty():
         try:
             created += _run_llm_phase(
-                harvest, store, paths, client, session_id, now, existing, taken_intents, mech_intents
+                model_harvest, store, paths, client, session_id, now, existing, taken_intents, mech_intents
             )
+            atomic_write(model_path, str(model_harvest.total_lines))
         except LLMError as exc:
             log_line(paths, f"extract: LLM 判断放弃（机械结果已落盘）：{exc}")
         except Exception as exc:  # noqa: BLE001 —— 抽取不得中断 flush

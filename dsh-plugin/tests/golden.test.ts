@@ -7,13 +7,14 @@
 
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { execFileSync } from 'node:child_process'
 
 import { beforeAll, describe, expect, it } from 'vitest'
 
 import { MemoryPaths } from '../src/memory.js'
 import { errorSignature } from '../src/signature.js'
 import { intentTokens, tokenize } from '../src/tokenize.js'
-import { fixture } from './helpers.js'
+import { fixture, pythonExecutable } from './helpers.js'
 
 interface SignatureCase { input: string, output: string }
 interface TokenCase { input: string, tokens: string[], intentTokens: string[] }
@@ -70,7 +71,8 @@ describe('文件 key 规约', () => {
   })
 
   it('项目根解析口径与 Python 一致', () => {
-    expect(MemoryPaths.forProject(fileKeys.projectDir).projectDir).toBe(fileKeys.resolvedProjectDir)
+    const resolved = execFileSync(pythonExecutable() ?? "python3", ["-c", "from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve())", fileKeys.projectDir], {encoding:"utf8"}).trim()
+    expect(MemoryPaths.forProject(fileKeys.projectDir).projectDir).toBe(resolved)
   })
 
   it.each(fileKeys.cases.map((item, index) => [index, item] as const))(

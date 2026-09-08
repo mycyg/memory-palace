@@ -879,6 +879,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from eventmem.core.cli import COMMANDS, main as core_main
+    actual = argv if argv is not None else sys.argv[1:]
+    if actual and actual[0] in COMMANDS:
+        return core_main(actual)
     parser = build_parser()
     args = parser.parse_args(argv)
 
