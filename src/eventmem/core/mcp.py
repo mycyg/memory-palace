@@ -7,6 +7,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 from .contact_tasks import ContactTaskInput, ContactTasks
 from .models import RecallRequest, RevisionInput, ScheduleInput, Scope, SourceInput
+from .self_knowledge import AssessmentInput, ClaimInput, PredictionInput, SelfKnowledge
 
 
 def create_mcp(engine):
@@ -58,6 +59,33 @@ def create_mcp(engine):
     def receive_source(source: SourceInput) -> dict:
         """Durably receive an explicitly provided source; duplicate source keys are idempotent."""
         return engine.receive(source)
+
+    @server.tool()
+    def record_self_claim(scope: Scope, claim: ClaimInput) -> dict:
+        """Record a versioned role declaration or unverified behavioral hypothesis with retained evidence record IDs. Role declarations require explicit user sources; hypotheses never become verified through repetition or scores. Replace only the same aspect, context and basis using the previous ID/revision. Use a stable command_id."""
+        return SelfKnowledge(engine, scope).claim(claim)
+
+    @server.tool()
+    def predict_self_behavior(scope: Scope, prediction: PredictionInput) -> dict:
+        """Register a probability for an observable future behavior before its outcome. Identify the case and available information. An optional generic-agent probability must concern the same case and information. The current claim pins the agent configuration version. A revised forecast is excluded from scoring."""
+        return SelfKnowledge(engine, scope).predict(prediction)
+
+    @server.tool()
+    def assess_self_prediction(scope: Scope, assessment: AssessmentInput) -> dict:
+        """Record a reported outcome with later user or operation evidence record IDs. Use null for an unresolved outcome. The interpretation remains inferred; the tool cannot independently certify reports or consciousness. Read/correct the existing assessment instead of creating duplicates."""
+        return SelfKnowledge(engine, scope).assess(assessment)
+
+    @server.tool()
+    def read_self_knowledge(
+        scope: Scope, agent_version: str | None = None, history: bool = False,
+        aspect: str | None = None, context: str | None = None,
+        limit: int = 50, budget: int = 2000,
+    ) -> dict:
+        """Read labeled self-claims and behavioral checks. Current reads require the actual agent configuration version; filter aspect/context for the question. history retains earlier views. budget limits text only, not the JSON envelope. Brier summaries cover returned assessments only, separate versions and deduplicate overlapping source hashes; they are not an independent evaluation."""
+        return SelfKnowledge(engine, scope).view(
+            agent_version=agent_version, history=history, aspect=aspect,
+            context=context, limit=limit, budget=budget,
+        )
 
     @server.tool()
     def source_evidence(source_id: str, cursor: str = "") -> dict:

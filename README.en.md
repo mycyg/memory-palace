@@ -115,7 +115,9 @@ Migration preserves original ids, content, archives, revision links and provenan
 
 ## Documentation and limits
 
-[Architecture and semantics](docs/architecture.md) · [Configuration, plugins and operations](docs/operations.md)
+[Architecture and semantics](docs/architecture.md) · [Configuration, plugins and operations](docs/operations.md) · [Self-knowledge and behavioral checks](docs/self-knowledge.md)
+
+Self-knowledge records distinguish role agreements, behavioral hypotheses and reported outcomes. MCP tools retain prospective predictions, later evidence and matched generic-agent estimates, with configuration-specific views and revisions. History remains available; repetition and scores never automatically verify a hypothesis.
 
 Fast lexical recall filters by scope and ranks up to 400 of the most recent matches. Deep mode supports ranking the full match set and optional model retrieval.
 

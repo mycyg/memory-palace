@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import copy
 import json
-import time
 import re
+import time
 from collections import defaultdict
 from functools import lru_cache
 
@@ -72,6 +72,8 @@ def valid(data, request):
         return "scope"
     if data.get("attributes", {}).get("analysis_pending"):
         return "analysis_pending"
+    if data.get("attributes", {}).get("self_knowledge") and not request.history:
+        return "self_knowledge_requires_versioned_view"
     if request.kinds and data["kind"] not in request.kinds:
         return "kind"
     stamp = request.at or now()
@@ -197,7 +199,7 @@ def candidates(engine, request):
                 vector_revisions = {r["id"]: r["revision"] for r in vector_hits}
                 channels["vector"] = list(vector_revisions)
             elif request.mode == "deep" and request.query:
-                from .providers import Providers, NotConfigured
+                from .providers import NotConfigured, Providers
 
                 try:
                     provider = Providers(engine)
@@ -212,7 +214,7 @@ def candidates(engine, request):
                 except NotConfigured:
                     trace["degraded"] = "embedding_not_configured"
             if request.mode == "deep" and request.query:
-                from .providers import Providers, NotConfigured
+                from .providers import NotConfigured, Providers
 
                 try:
                     visual, index_id = Providers(engine).visual_embed(
@@ -250,7 +252,7 @@ def candidates(engine, request):
             if request.mode == "deep" and request.query:
                 # Query expansion is bounded and optional. Every round retains the
                 # same scope and time restrictions before candidate collection.
-                from .providers import Providers, NotConfigured
+                from .providers import NotConfigured, Providers
 
                 try:
                     expanded = Providers(engine).json(
@@ -402,6 +404,10 @@ def recall(engine, request: RecallRequest):
                 continue
             body = data["content"]
             prefix = f"[{rid} r{revision} {data['kind']} {data['status']}] "
+            self_info = data["attributes"].get("self_knowledge")
+            if self_info:
+                label = self_info.get("basis", self_info.get("entry", "self_knowledge"))
+                prefix += f"[{label} {data['confirmation']} {self_info.get('agent_version', 'unknown')}] "
             line = prefix + body
             if tokens(line) > budget - used:
                 # Event contents remain intact behind the read link. A typed hint

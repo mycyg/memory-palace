@@ -116,7 +116,9 @@ uv run eventmem restore /private/backup.tar.gz --root /another/empty/root
 
 ## 文档与限制
 
-[架构与数据语义](docs/architecture.md) · [配置、插件、迁移与运维](docs/operations.md)
+[架构与数据语义](docs/architecture.md) · [配置、插件、迁移与运维](docs/operations.md) · [自我认知与行为检验](docs/self-knowledge.md)
+
+自我认知记录区分角色约定、行为假设与观察结果。MCP 支持保存事前预测、引用后续证据、比较同题的通用智能体预测，并按配置版本读取与修订。历史记录保留，假设不会因重复或评分升格为事实。
 
 快速全文检索先按范围筛选，再对最近匹配的最多 400 条记录排序。深度模式支持对完整匹配集排序，也支持模型检索。
 

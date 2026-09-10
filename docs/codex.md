@@ -38,6 +38,8 @@ The MCP server also exposes `create_contact_task`, `list_contact_tasks` and `man
 
 ## Shared companion memory and WeChat
 
+The MCP server includes `record_self_claim`, `predict_self_behavior`, `assess_self_prediction` and `read_self_knowledge`. Use an explicit configuration version and retained evidence when recording or reading an agent's self-model. These entries distinguish agreed roles from unverified behavioral hypotheses and reported outcomes. See [self-knowledge and behavioral checks](self-knowledge.md) for provenance requirements, current views, history and calibration limits.
+
 Default scopes isolate each absolute working directory. Desktop Codex and an ACP client such as `wechat-acp` can share companion memory by installing into each agent's actual working directory with the same root and scope:
 
 ```sh
