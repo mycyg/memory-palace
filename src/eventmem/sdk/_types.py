@@ -73,6 +73,7 @@ class ModelRole(TypedDict, total=False):
     timeout_seconds: float
     dimensions: int | None
     preprocessing: str
+    local_embedding: bool
     input_price_per_million: float
     output_price_per_million: float
 

@@ -7,7 +7,7 @@ import uuid
 
 from .db import Conflict, Deleted, Missing, digest
 from .models import RecordInput, Scope, now
-from .providers import NotConfigured, Providers
+from .providers import NotConfigured, ProviderError, Providers
 
 
 class Worker:
@@ -97,7 +97,9 @@ class Worker:
                     )
                     error = (
                         str(exc)
-                        if isinstance(exc, (NotConfigured, ValueError, Conflict))
+                        if isinstance(
+                            exc, (NotConfigured, ValueError, Conflict, ProviderError)
+                        )
                         else type(exc).__name__
                     )
                     conn.execute(
@@ -449,8 +451,8 @@ class Worker:
             )
             return lambda conn: engine._insert(conn, record)
         if kind == "prefetch":
-            from .models import RecallRequest
             from .db import tokenize
+            from .models import RecallRequest
 
             request = RecallRequest(
                 query=str(payload["cue"])[:4000],
@@ -570,7 +572,9 @@ class Worker:
                 # A replay cannot inject into a past host context; only receipt
                 # events are replayed. Startup/compact are fetched again live.
                 if data["event"] in {"tool", "message", "boundary", "end", "compact"}:
-                    handle(self.engine, data["event"], data["payload"], receipt_only=True)
+                    handle(
+                        self.engine, data["event"], data["payload"], receipt_only=True
+                    )
                 path.unlink(missing_ok=True)
             except Deleted:
                 path.unlink(missing_ok=True)

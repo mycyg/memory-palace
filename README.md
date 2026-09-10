@@ -127,3 +127,5 @@ PDF 默认解析原生文本，扫描页需要视觉端点。完整的本地布�
 支持在 macOS／Linux 上进行单用户本地部署。
 
 [MIT License](LICENSE)
+
+本地向量服务支持按需启动 Qwen3-Embedding-0.6B，并在连接中断后恢复。安装、配置、故障行为与历史通道数据修复见[本地 embedding 与通道记忆维护](docs/local-embedding.md)。

@@ -70,6 +70,12 @@ def permitted(data, request):
 def valid(data, request):
     if not permitted(data, request):
         return "scope"
+    if (
+        request.phase == "passive"
+        and request.scenario == "companion"
+        and data.get("attributes", {}).get("host_event") == "tool"
+    ):
+        return "raw_tool_requires_explicit_read"
     if data.get("attributes", {}).get("analysis_pending"):
         return "analysis_pending"
     if data.get("attributes", {}).get("self_knowledge") and not request.history:
@@ -246,7 +252,10 @@ def candidates(engine, request):
                 ).fetchall()
                 channels["graph"] = list(
                     dict.fromkeys(
-                        r[k] for r in relations for k in ("subject", "object")
+                        r[k]
+                        for r in relations
+                        for k in ("subject", "object")
+                        if r[k] not in seeds
                     )
                 )
             if request.mode == "deep" and request.query:
@@ -291,7 +300,8 @@ def candidates(engine, request):
         for channel, ids in channels.items():
             trace["channels"][channel] = ids[:100]
             for rank, rid in enumerate(ids):
-                ranks[rid] += (2 if channel == "exact" else 1) / (60 + rank + 1)
+                weight = 2 if channel == "exact" else 0.25 if channel == "graph" else 1
+                ranks[rid] += weight / (60 + rank + 1)
         for rid in list(ranks):
             try:
                 data = docs.get(rid) or engine._get(

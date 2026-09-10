@@ -244,6 +244,7 @@ class ModelRole(Model):
     timeout_seconds: float = Field(default=60, gt=0, le=600)
     dimensions: int | None = Field(default=None, ge=1, le=8192)
     preprocessing: str = "text-v1"
+    local_embedding: bool = False
     input_price_per_million: float = Field(default=0, ge=0)
     output_price_per_million: float = Field(default=0, ge=0)
 

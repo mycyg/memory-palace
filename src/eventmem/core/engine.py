@@ -7,6 +7,7 @@ import uuid
 from pathlib import Path
 
 from .db import Conflict, Database, Deleted, Missing, digest, dumps, tokenize
+from .envelopes import current_message
 from .models import RecordInput, RevisionInput, Scope, SourceInput, now
 
 
@@ -42,6 +43,13 @@ class Engine:
         identity = [source.namespace, source.key, source.version, source.scope.key()]
         sid = "src_" + digest(identity)[:32]
         raw = attachment if attachment is not None else source.text.encode()
+        record_text = source.text
+        if (
+            source.namespace.startswith("host:")
+            and source.metadata.get("host_event") == "message"
+            and source.metadata.get("role") == "user"
+        ):
+            record_text = current_message(record_text)
         hash_ = digest(raw)
         # Only immutable blob IO precedes the transaction; unreferenced blobs are GC'd.
         blob = self.db.blob(raw)
@@ -95,7 +103,7 @@ class Engine:
                     id="mem_" + digest([sid, "root"])[:32],
                     kind=source.kind,
                     title=source.title,
-                    content=source.text,
+                    content=record_text,
                     scope=source.scope,
                     source_ids=[sid],
                     valid_from=source.occurred_at,
@@ -861,6 +869,15 @@ class Engine:
                 r[0]: r[1]
                 for r in conn.execute("SELECT state,COUNT(*) FROM jobs GROUP BY state")
             }
+            counts["job_details"] = [
+                {"state": row[0], "kind": row[1], "error": row[2], "count": row[3]}
+                for row in conn.execute(
+                    "SELECT state,kind,error,COUNT(*) FROM jobs "
+                    "WHERE state IN ('failed','retry','waiting_config') "
+                    "GROUP BY state,kind,error ORDER BY COUNT(*) DESC LIMIT 50"
+                )
+            ]
+            counts["statistics_scope"] = "store"
             counts["kinds"] = {
                 r[0]: r[1]
                 for r in conn.execute(

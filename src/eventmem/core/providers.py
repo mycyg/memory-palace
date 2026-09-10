@@ -14,6 +14,10 @@ class NotConfigured(Exception):
     pass
 
 
+class ProviderError(RuntimeError):
+    """Sanitized provider failure safe for durable job diagnostics."""
+
+
 class Providers:
     """Configurable OpenAI-compatible endpoints; keys are environment references.
 
@@ -44,23 +48,48 @@ class Providers:
             headers = {"anthropic-version": "2023-06-01"}
             if config.api_key_env:
                 headers["x-api-key"] = os.environ[config.api_key_env]
+        local = config.local_embedding
+        if local:
+            if role != "embedding" or route != "embeddings":
+                raise ValueError("Local wake-up is only available for embeddings")
+            from .local_embedding import ensure_started
+
+            headers = {
+                "Authorization": "Bearer "
+                + ensure_started(self.engine.db.root, config.endpoint, config.model)
+            }
         start = time.perf_counter()
-        with httpx.Client(
-            timeout=config.timeout_seconds, follow_redirects=False
-        ) as client:
-            response = client.post(
-                config.endpoint.rstrip("/") + "/" + route,
-                headers=headers,
-                json=json_,
-                files=files,
-                data=data,
-            )
-            if response.status_code >= 400:
-                # Never persist response bodies, headers or credential-bearing URLs.
-                raise RuntimeError(
-                    f"Model role {role} returned HTTP {response.status_code}"
-                )
-            result = response.json()
+        for attempt in range(2 if local else 1):
+            try:
+                with httpx.Client(
+                    timeout=config.timeout_seconds,
+                    follow_redirects=False,
+                    trust_env=not local,
+                ) as client:
+                    response = client.post(
+                        config.endpoint.rstrip("/") + "/" + route,
+                        headers=headers,
+                        json=json_,
+                        files=files,
+                        data=data,
+                    )
+                if response.status_code >= 400:
+                    if local and attempt == 0 and response.status_code == 503:
+                        continue
+                    raise ProviderError(
+                        f"Model role {role} returned HTTP {response.status_code}"
+                    )
+                result = response.json()
+                break
+            except (httpx.ConnectError, httpx.ReadError, httpx.RemoteProtocolError):
+                if not local or attempt:
+                    raise
+                # Embedding is idempotent. Recover a crashed process once; other
+                # model requests are never replayed here.
+                headers = {
+                    "Authorization": "Bearer "
+                    + ensure_started(self.engine.db.root, config.endpoint, config.model)
+                }
         usage = result.get("usage", {})
         input_tokens, output_tokens = (
             usage.get("prompt_tokens", usage.get("input_tokens", 0)),

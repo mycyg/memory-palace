@@ -5,6 +5,7 @@ from pathlib import Path
 
 from .api import SessionBoundary, boundary
 from .db import digest, dumps
+from .envelopes import current_message
 from .models import RecallRequest, Scope, SourceInput
 
 
@@ -48,13 +49,15 @@ def handle(engine, event, payload, *, receipt_only=False):
     result = payload.get(
         "tool_response", payload.get("value", payload.get("contentText", ""))
     )
+    raw_text = str(payload.get("text") or payload.get("prompt") or "")
+    message = current_message(raw_text) if payload.get("role") == "user" else raw_text
     recalled = None
     if event == "message" and payload.get("recall_on_message") and not receipt_only:
         # Query before receipt so the just-submitted prompt cannot echo back as
         # historical evidence or displace relevant earlier memories.
         recalled = engine.recall(
             RecallRequest(
-                query=str(payload.get("text") or payload.get("prompt") or "")[:4000],
+                query=message[:4000],
                 scope=scope,
                 scenario=scenario,
                 session=session,
@@ -72,11 +75,7 @@ def handle(engine, event, payload, *, receipt_only=False):
                 }
             )
             if event == "tool"
-            else str(
-                payload.get("text")
-                or payload.get("prompt")
-                or dumps(payload.get("data", payload))
-            )
+            else str(raw_text or dumps(payload.get("data", payload)))
         )
         key = str(
             payload.get("tool_use_id")
@@ -123,6 +122,8 @@ def handle(engine, event, payload, *, receipt_only=False):
             cue = str(arguments)
         if payload.get("isError"):
             cue += " " + str(payload.get("errorMessage", ""))
+        if not cue.strip():
+            return {"status": "received", "id": source["id"]} if event == "tool" else {}
         return engine.recall(
             RecallRequest(
                 query=cue[:4000],

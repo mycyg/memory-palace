@@ -21,6 +21,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.25", "ruff>=0.12", "psutil>=6", "reportlab>=4"]
+local-embedding = ["sentence-transformers>=3,<6", "transformers>=4.51,<6"]
 vector = ["lancedb>=0.25,<1", "numpy>=2", "pyarrow>=18"]
 graph = ["igraph>=0.11,<2"]
 media = ["docling>=2.50,<3", "imageio-ffmpeg>=0.6", "pillow>=11"]

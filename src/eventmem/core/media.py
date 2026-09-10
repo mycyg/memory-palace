@@ -9,6 +9,7 @@ import tempfile
 from pathlib import Path
 
 from .db import digest
+from .envelopes import current_message
 from .models import RecordInput, Scope
 from .providers import NotConfigured
 
@@ -166,6 +167,14 @@ def parse(engine, sid):
             # Preserve paragraph boundaries; split exceptionally long paragraphs
             # with explicit offsets rather than manufacturing page numbers.
             offset = 0
+            if (
+                source["namespace"].startswith("host:")
+                and source.get("metadata", {}).get("host_event") == "message"
+                and source.get("metadata", {}).get("role") == "user"
+            ):
+                body = current_message(text)
+                offset = len(text) - len(body)
+                text = body
             for paragraph in text.split("\n\n"):
                 for start in range(0, len(paragraph), 6000):
                     pieces.append(

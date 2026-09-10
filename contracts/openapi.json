@@ -2682,6 +2682,11 @@
             "title": "Preprocessing",
             "default": "text-v1"
           },
+          "local_embedding": {
+            "type": "boolean",
+            "title": "Local Embedding",
+            "default": false
+          },
           "input_price_per_million": {
             "type": "number",
             "minimum": 0.0,

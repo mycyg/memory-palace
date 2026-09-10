@@ -855,6 +855,11 @@ export interface components {
              */
             preprocessing?: string;
             /**
+             * Local Embedding
+             * @default false
+             */
+            local_embedding?: boolean;
+            /**
              * Input Price Per Million
              * @default 0
              */
