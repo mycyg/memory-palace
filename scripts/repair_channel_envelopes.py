@@ -138,6 +138,13 @@ def main():
                     json=action["request"],
                 )
                 r.raise_for_status()
+                if (
+                    action["request"]["action"] == "archive"
+                    and r.json().get("status") != "archived"
+                ):
+                    raise RuntimeError(
+                        "Archive revision did not persist its requested status"
+                    )
             args.output.write_text(
                 json.dumps(
                     {"applied": True, "actions": actions}, ensure_ascii=False, indent=2

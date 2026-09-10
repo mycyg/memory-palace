@@ -113,7 +113,7 @@ class RecordInput(Model):
             "relationship",
             "commitment",
         ):
-            if self.confirmation != "verified":
+            if self.confirmation != "verified" and self.status == "active":
                 self.status = "unverified"
         return self
 

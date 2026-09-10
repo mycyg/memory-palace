@@ -51,7 +51,7 @@ uv run python scripts/repair_channel_envelopes.py \
   --output /private/channel-repair-plan.json
 ```
 
-Inspect the private plan and make a backup before adding `--apply`. The script corrects original message records and archives generated entries only when their exact quoted evidence occurs in excluded transport history and not in the current body. Multi-source entries are skipped. Source snapshots and revision history remain; records are not permanently deleted. Concurrent revision changes fail rather than silently overwrite newer content. Re-running plans the remaining current records.
+Inspect the private plan and make a backup before adding `--apply`. The script corrects original message records and archives generated entries only when their exact quoted evidence occurs in excluded transport history and not in the current body. Multi-source entries are skipped. Source snapshots and revision history remain; records are not permanently deleted. Retiring an unverified model claim preserves the requested archived, retracted, refuted or superseded state; restoring it does not verify its truth. Concurrent revision changes fail rather than silently overwrite newer content. Re-running plans the remaining current records.
 
 Semantic preference changes require an evidence-backed `replace` revision linking the obsolete record to its replacement. The repair script does not guess that one preference replaces another.
 

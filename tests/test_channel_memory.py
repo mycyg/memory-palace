@@ -341,3 +341,46 @@ def test_legacy_extract_part_cannot_restore_transport_history(
         "Current evidence",
         "Current fact",
     }
+
+
+@pytest.mark.parametrize(
+    "action,status",
+    [
+        ("archive", "archived"),
+        ("retract", "retracted"),
+        ("refute", "refuted"),
+        ("replace", "superseded"),
+    ],
+)
+def test_retirement_of_unverified_generated_claim_survives_validation(
+    tmp_path, action, status
+):
+    from eventmem.core.models import RecordInput, RevisionInput
+
+    engine = Engine(tmp_path)
+    claim = engine.add_record(
+        RecordInput(kind="fact", content="Model hypothesis", generated=True), "claim"
+    )
+    assert claim["status"] == "unverified"
+    replacement = engine.add_record(
+        RecordInput(kind="fact", content="Verified evidence", confirmation="verified"),
+        "replacement",
+    )
+    change = RevisionInput(
+        expected_revision=1,
+        command_id="retire",
+        action=action,
+        replacement_id=replacement["id"] if action == "replace" else None,
+    )
+    retired = engine.revise(claim["id"], change)
+    assert retired["status"] == status
+    assert engine.get(claim["id"])["status"] == status
+    restored = engine.revise(
+        claim["id"],
+        RevisionInput(
+            expected_revision=2,
+            command_id="restore",
+            action="restore",
+        ),
+    )
+    assert restored["status"] == "unverified"
