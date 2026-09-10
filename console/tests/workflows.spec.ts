@@ -13,6 +13,7 @@ test('overview, scoped import, correction, provenance and restore',async({page})
   await dialog.getByRole('button',{name:'保存来源'}).click();
   await expect(dialog).not.toBeVisible();
   await page.getByRole('button',{name:'记忆浏览',exact:true}).click();
+  await page.getByLabel('搜索当前范围',{exact:true}).fill(title);
   await page.getByRole('button').filter({hasText:title}).click();
   const drawer=page.getByRole('dialog',{name:'记忆详情'});
   await expect(drawer.getByText('Browser test: migration uses isolated target.')).toBeVisible();
@@ -98,6 +99,7 @@ test('correction loads a complete long record before saving',async({page})=>{
  await expect(drawer.getByLabel('更正后的内容')).toHaveValue(content);
  await drawer.getByLabel('更正后的内容').fill('Corrected opening. '+content);
  await drawer.getByRole('button',{name:'保存纠正'}).click();
+ await expect(drawer.getByText('r2',{exact:true})).toBeVisible();
  const first=await (await page.request.get(`/v1/memories/${source.record_ids[0]}?length=32000&budget=32000`,{headers})).json();
  expect(first.content).toBe('Corrected opening. '+content);
 });
