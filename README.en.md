@@ -66,6 +66,7 @@ In the console, assign models to extraction, conflict, summary, rerank, embeddin
 | Interface | Capability |
 |---|---|
 | Claude Code plugin | Collect messages and tool records; handle startup recovery, pre-action recall, compaction and exit |
+| Codex native hooks + MCP | Capture prompts, final replies and tools; recall at startup and before prompts; restore after compaction; ACP/WeChat host support |
 | `dsh-eventmem` | Send DeepSeek Harness events to the common service by default; enable legacy mode explicitly to roll back |
 | HTTP `/v1` | Sources, memories, corrections, relations, continuity, jobs, maintenance, scheduling and observability |
 | MCP | stdio and Streamable HTTP tool access |
@@ -73,6 +74,8 @@ In the console, assign models to extraction, conflict, summary, rerank, embeddin
 | `eventmem` CLI | Service, console, MCP, ingestion/recall, migration, backup, scheduling and evaluation |
 
 MCP provides tool access. Automatic collection and passive context injection require a host event adapter. Keep the local service running when using plugins.
+
+Install native Codex hooks with `uv run eventmem codex install --project /path/to/project`. Restart Codex and review/trust the MemoryPalace definitions in `/hooks`. The [Codex guide](docs/codex.md) covers MCP, shared companion memory and WeChat ACP configuration.
 
 ```sh
 uv run python examples/v1/scenarios.py tool

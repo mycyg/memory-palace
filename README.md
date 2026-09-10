@@ -65,6 +65,7 @@ uv run eventmem console
 
 | 接入 | 能力 |
 |---|---|
+| Codex 原生 hooks + MCP | 自动采集提问、最终回复与工具结果；启动与提问时召回，压缩后恢复；支持 ACP／微信宿主 |
 | Claude Code 插件 | 采集消息与工具记录，支持启动恢复、操作前查询、压缩恢复和退出处理 |
 | `dsh-eventmem` | 将 DeepSeek Harness 事件接入统一服务；可显式启用旧版模式回退 |
 | HTTP `/v1` | 来源、记忆、纠正、关系、连续性、任务、维护、调度与观测 |
@@ -73,6 +74,8 @@ uv run eventmem console
 | `eventmem` CLI | 服务、管理台、MCP、写入／召回、迁移、备份、调度与评估 |
 
 MCP 提供工具式访问。自动采集和被动注入需要接入宿主事件；使用插件时，本地服务需要保持运行。
+
+Codex 可直接安装原生钩子：`uv run eventmem codex install --project /path/to/project`。重启后，在 `/hooks` 审阅并信任 MemoryPalace 的配置。[Codex 接入指南](docs/codex.md)包含 MCP、共享陪伴记忆与微信 ACP 的配置。
 
 ```sh
 uv run python examples/v1/scenarios.py tool

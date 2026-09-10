@@ -28,6 +28,7 @@ COMMANDS = {
     "evaluate",
     "benchmark",
     "host",
+    "codex",
 }
 
 
@@ -45,7 +46,21 @@ def parser():
                 os.environ.get("EVENTMEM_HOME", str(Path.home() / ".memorypalace"))
             ),
         )
-        if command in {"serve", "console"}:
+        if command == "codex":
+            p.add_argument("action", choices=["install", "uninstall"])
+            target = p.add_mutually_exclusive_group()
+            target.add_argument("--project", type=Path, default=Path.cwd())
+            target.add_argument("--user", action="store_true")
+            p.add_argument(
+                "--url", default=os.environ.get("EVENTMEM_URL", "http://127.0.0.1:8319")
+            )
+            p.add_argument(
+                "--scope", help="JSON scope; default isolates each project cwd"
+            )
+            p.add_argument(
+                "--scenario", choices=["tool", "companion", "knowledge"], default="tool"
+            )
+        elif command in {"serve", "console"}:
             p.add_argument("--port", type=int, default=8319)
             p.add_argument("--no-worker", action="store_true")
         elif command in {"receive", "recall", "correct", "contact", "host"}:
@@ -99,9 +114,25 @@ def parser():
 
 def main(argv=None):
     args = parser().parse_args(argv)
-    if args.command in {"migrate", "restore"}:
-        from .transfer import migrate, restore
+    if args.command == "codex":
+        from eventmem.hooks.codex_install import install
+
+        config_dir = (
+            Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex")))
+            if args.user
+            else args.project / ".codex"
+        )
+        result = install(
+            config_dir,
+            root=args.root,
+            url=args.url,
+            scope=json.loads(args.scope) if args.scope else None,
+            scenario=args.scenario,
+            remove=args.action == "uninstall",
+        )
+    elif args.command in {"migrate", "restore"}:
         from .models import Scope
+        from .transfer import migrate, restore
 
         result = (
             migrate(args.legacy, args.root, Scope.model_validate_json(args.scope))
@@ -109,7 +140,7 @@ def main(argv=None):
             else restore(args.path, args.root)
         )
     elif args.command in {"evaluate", "benchmark"}:
-        from .evaluation import evaluate, benchmark
+        from .evaluation import benchmark, evaluate
 
         result = (
             evaluate(args.output, args.dataset)
@@ -124,8 +155,9 @@ def main(argv=None):
             or command == "mcp"
             and args.transport == "streamable-http"
         ):
-            from .api import create_app, credential
             import uvicorn
+
+            from .api import create_app, credential
 
             app = create_app(
                 engine=engine, workers=not getattr(args, "no_worker", False)
@@ -167,8 +199,8 @@ def main(argv=None):
 
                 result = handle(engine, args.event, data)
             else:
-                from .scheduler import Scheduler
                 from .models import ScheduleInput
+                from .scheduler import Scheduler
 
                 result = Scheduler(engine).schedule(ScheduleInput.model_validate(data))
         elif command == "memory":
@@ -194,6 +226,7 @@ def main(argv=None):
             )
         elif command == "api":
             import httpx
+
             from .api import credential
 
             with httpx.Client(

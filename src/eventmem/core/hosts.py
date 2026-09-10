@@ -20,13 +20,13 @@ def handle(engine, event, payload, *, receipt_only=False):
             capture_transcript(engine, Path(transcript), session, scope)
         boundary_event = event
         if receipt_only or (
-            payload.get("host") == "claude-code" and event == "compact"
+            payload.get("host") in {"claude-code", "codex"} and event == "compact"
         ):
             # PreCompact and offline replay save state without accounting for
             # context that the host has not actually injected.
             boundary_event = "checkpoint" if event != "end" else "end"
         elif (
-            payload.get("host") == "claude-code"
+            payload.get("host") in {"claude-code", "codex"}
             and event == "start"
             and payload.get("source") in {"compact", "clear"}
         ):
@@ -48,6 +48,19 @@ def handle(engine, event, payload, *, receipt_only=False):
     result = payload.get(
         "tool_response", payload.get("value", payload.get("contentText", ""))
     )
+    recalled = None
+    if event == "message" and payload.get("recall_on_message") and not receipt_only:
+        # Query before receipt so the just-submitted prompt cannot echo back as
+        # historical evidence or displace relevant earlier memories.
+        recalled = engine.recall(
+            RecallRequest(
+                query=str(payload.get("text") or payload.get("prompt") or "")[:4000],
+                scope=scope,
+                scenario=scenario,
+                session=session,
+                phase="passive",
+            )
+        )
     if event in {"tool", "message", "boundary"}:
         content = (
             dumps(
@@ -90,6 +103,12 @@ def handle(engine, event, payload, *, receipt_only=False):
                     "tool": tool,
                     "action": arguments,
                     "outcome": result,
+                    **({"role": payload["role"]} if payload.get("role") else {}),
+                    **(
+                        {"turn_id": payload["turn_id"]}
+                        if payload.get("turn_id")
+                        else {}
+                    ),
                 },
                 extract=bool(payload.get("extract", event == "message")),
             )
@@ -113,7 +132,7 @@ def handle(engine, event, payload, *, receipt_only=False):
                 phase="passive",
             )
         )
-    return {"status": "received", "id": source["id"]}
+    return {"status": "received", "id": source["id"], **(recalled or {})}
 
 
 def capture_transcript(engine, path, session, scope):

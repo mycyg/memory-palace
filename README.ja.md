@@ -66,6 +66,7 @@ uv run eventmem console
 | 接続 | 機能 |
 |---|---|
 | Claude Code プラグイン | メッセージとツールの記録を収集。起動時の復元、操作前の検索、圧縮後の復元、終了処理に対応 |
+| Codex ネイティブ hooks + MCP | 入力・最終応答・ツール結果を記録し、起動時と入力前に記憶を検索。圧縮後の復元と ACP／WeChat ホストに対応 |
 | `dsh-eventmem` | DeepSeek Harness のイベントを共通サービスへ送信。旧版モードを明示的に有効にして切り戻し可能 |
 | HTTP `/v1` | 情報源、記憶、訂正、関係、継続状態、ジョブ、管理、配信、観測 |
 | MCP | stdio・Streamable HTTP によるツールアクセス |
@@ -73,6 +74,8 @@ uv run eventmem console
 | `eventmem` CLI | サービス、管理画面、MCP、取り込み・検索、移行、バックアップ、配信、評価 |
 
 MCP はツールとしてのアクセスを提供します。自動収集やコンテキストの受動的な注入には、ホストのイベントアダプターが必要です。プラグインを使う間はローカルサービスを起動しておいてください。
+
+`uv run eventmem codex install --project /path/to/project` で Codex のネイティブフックを導入できます。再起動後、`/hooks` で MemoryPalace の定義を確認して信頼してください。[Codex 接続ガイド](docs/codex.md)に MCP、共有コンパニオン記憶、WeChat ACP の設定を掲載しています。
 
 ```sh
 uv run python examples/v1/scenarios.py tool
