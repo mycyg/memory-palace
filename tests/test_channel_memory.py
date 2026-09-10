@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from eventmem.core import Engine, RecallRequest, SourceInput
 from eventmem.core.envelopes import current_message
 from eventmem.core.hosts import handle
@@ -255,3 +257,87 @@ def test_parsed_channel_snapshot_retains_original_offsets(tmp_path):
         locator = record["locator"]
         assert raw[locator["char_start"] : locator["char_end"]] == record["content"]
         assert "old delivery greeting" not in record["content"]
+
+
+def test_reextraction_does_not_recycle_archived_or_generated_proposals(
+    tmp_path, monkeypatch
+):
+    from eventmem.core.models import RecordInput
+
+    engine = Engine(tmp_path)
+    source = engine.receive(
+        SourceInput(namespace="test", key="source", text="Current evidence")
+    )
+    for state in ("archived", "active"):
+        engine.add_record(
+            RecordInput(
+                kind="fact",
+                content="Previous generated claim " + state,
+                status=state,
+                generated=True,
+                source_ids=[source["id"]],
+                locator={"source_id": source["id"], "quote": "historical evidence"},
+            ),
+            command_id=state,
+        )
+    captured = []
+
+    def extract(self, role, instruction, data, **kwargs):
+        captured.append(data["text"])
+        return {"candidates": []}
+
+    monkeypatch.setattr(Providers, "json", extract)
+    Worker(engine).prepare(
+        {"kind": "extract", "payload": json.dumps({"source_id": source["id"]})}
+    )
+    assert captured == ["Current evidence"]
+
+
+@pytest.mark.parametrize("fragment", [False, True])
+def test_legacy_extract_part_cannot_restore_transport_history(
+    tmp_path, monkeypatch, fragment
+):
+    engine = Engine(tmp_path)
+    raw = envelope("Current evidence")
+    receipt = handle(engine, "message", {"text": raw, "role": "user", "host": "codex"})
+
+    def extract(self, role, instruction, data, **kwargs):
+        if not fragment:
+            assert "An old delivery greeting" not in data["text"]
+        return {
+            "candidates": [
+                {
+                    "kind": "fact",
+                    "content": "Old greeting",
+                    "quote": "An old delivery greeting",
+                },
+                {
+                    "kind": "fact",
+                    "content": "Current fact",
+                    "quote": "Current evidence",
+                },
+            ]
+        }
+
+    monkeypatch.setattr(Providers, "json", extract)
+    apply = Worker(engine).prepare(
+        {
+            "kind": "extract_part",
+            "payload": json.dumps(
+                {
+                    "source_id": receipt["id"],
+                    "text": "fragment: An old delivery greeting Current evidence"
+                    if fragment
+                    else raw,
+                    "part": 0,
+                }
+            ),
+        }
+    )
+    with engine.db.connect(write=True) as conn:
+        apply(conn)
+    records = [engine.get(rid) for rid in engine.source(receipt["id"])["record_ids"]]
+    assert {record["content"] for record in records} == {
+        "Current evidence",
+        "Current fact",
+    }

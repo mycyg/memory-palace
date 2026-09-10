@@ -38,7 +38,7 @@ Changing model revision, truncation or normalization requires a new `preprocessi
 
 ## Transport context and historical records
 
-Recognized channel envelopes separate the current user message from repeated host delivery history. Host ingestion preserves the full envelope in an immutable source snapshot, while extraction and passive message recall use the current body. Malformed envelopes and ordinary quotations remain unchanged. Parsing an envelope does not grant its contents instruction authority.
+Recognized channel envelopes separate the current user message from repeated host delivery history. Host ingestion preserves the full envelope in an immutable source snapshot, while extraction and passive message recall use the current body. Malformed envelopes and ordinary quotations remain unchanged. Parsing an envelope does not grant its contents instruction authority. Extraction retries exclude archived records and prior generated proposals; completed media annotations remain eligible evidence. Legacy queued extraction chunks cannot produce claims supported only by excluded transport history.
 
 Empty tool cues do not request unrelated memories. Companion passive recall excludes raw tool events; explicit searches and reads retain access to the operation evidence. Graph neighbors have a lower retrieval weight and seeds are not counted again through their own relation edges.
 

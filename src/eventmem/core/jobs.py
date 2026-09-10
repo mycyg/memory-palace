@@ -6,6 +6,7 @@ import time
 import uuid
 
 from .db import Conflict, Deleted, Missing, digest
+from .envelopes import current_message
 from .models import RecordInput, Scope, now
 from .providers import NotConfigured, ProviderError, Providers
 
@@ -251,12 +252,26 @@ class Worker:
             source = engine.source(sid)
             if source["mechanical"] != "complete":
                 raise Conflict("Mechanical parsing has not completed")
+            channel_body = None
+            if (
+                source["namespace"].startswith("host:")
+                and source.get("metadata", {}).get("host_event") == "message"
+                and source.get("metadata", {}).get("role") == "user"
+            ):
+                raw = engine.source(sid, content=True).read_text(encoding="utf-8")
+                body = current_message(raw)
+                if body != raw:
+                    channel_body = body
             if kind == "extract_part":
-                text = payload["text"]
+                text = (
+                    current_message(payload["text"])
+                    if channel_body is not None
+                    else payload["text"]
+                )
             else:
                 with engine.db.connect() as conn:
                     rows = conn.execute(
-                        "SELECT r.data FROM records r JOIN evidence e ON e.record_id=r.id WHERE e.source_id=? AND r.deleted=0 AND (json_extract(r.data,'$.generated')=0 OR json_extract(r.data,'$.locator.source_id')=?) ORDER BY r.id",
+                        "SELECT r.data FROM records r JOIN evidence e ON e.record_id=r.id WHERE e.source_id=? AND r.deleted=0 AND r.status IN ('active','unverified') AND (json_extract(r.data,'$.generated')=0 OR (json_extract(r.data,'$.locator.source_id')=? AND json_extract(r.data,'$.locator.analysis_role') IN ('asr','vision'))) ORDER BY r.id",
                         (sid, sid),
                     )
                     batches, current = [], ""
@@ -301,7 +316,11 @@ class Worker:
             proposals = []
             for i, candidate in enumerate(result.get("candidates", [])[:100]):
                 quote = candidate.get("quote", "")
-                if not quote or quote not in text:
+                if (
+                    not quote
+                    or quote not in text
+                    or (channel_body is not None and quote not in channel_body)
+                ):
                     continue
                 proposals.append(
                     RecordInput(
