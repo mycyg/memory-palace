@@ -42,6 +42,8 @@ MemoryPalace 是面向工具协作、陪伴与知识积累的单用户记忆系�
 
 ![主动联系](docs/diagrams/proactive-contact.png)
 
+Codex 等 MCP 宿主可以创建、查询和管理提醒任务，操作需要指定记忆范围与联系策略。任务保留对话依据、修订与投递状态。[任务管理指南](docs/contact-tasks.md)提供 MCP 和 Python 用法。
+
 ## 安装与启动
 
 需要 Python 3.11–3.13、Node.js 22 和 [uv](https://docs.astral.sh/uv/)：

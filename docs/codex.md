@@ -34,6 +34,8 @@ args = ["mcp", "--root", "/private/memorypalace"]
 
 Restart Codex to load the server. The stdio server opens the shared database; the HTTP service handles hooks and background jobs. The `memorypalace` server name lets hooks exclude memory-tool output from new observations. Set `EVENTMEM_MCP_SERVER` if using another name.
 
+The MCP server also exposes `create_contact_task`, `list_contact_tasks` and `manage_contact_task`. Codex can manage source-backed reminders through an existing scoped contact policy, including revisions and delivery states. Start the HTTP service for background scheduling and configure a host callback for delivery. These tools do not manage Codex app automations. See the [contact task guide](contact-tasks.md) for configuration and request examples.
+
 ## Shared companion memory and WeChat
 
 Default scopes isolate each absolute working directory. Desktop Codex and an ACP client such as `wechat-acp` can share companion memory by installing into each agent's actual working directory with the same root and scope:

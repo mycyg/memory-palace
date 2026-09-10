@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
-from .models import RecallRequest, RevisionInput, SourceInput, Scope, ScheduleInput
+from .contact_tasks import ContactTaskInput, ContactTasks
+from .models import RecallRequest, RevisionInput, ScheduleInput, Scope, SourceInput
 
 
 def create_mcp(engine):
@@ -120,6 +123,32 @@ def create_mcp(engine):
         from .scheduler import Scheduler
 
         return Scheduler(engine).schedule(request)
+
+    @server.tool()
+    def create_contact_task(scope: Scope, task: ContactTaskInput) -> dict:
+        """Create a source-backed reminder under an existing scoped contact policy. Use a stable command_id and timezone-aware due_at. text is delivered at the due time; basis records the conversation reason. Model-authored text keeps model authority. A scheduled receipt does not confirm delivery. Requires a running worker and host callback for sending."""
+        return ContactTasks(engine, scope, [task.policy_id]).create(task)
+
+    @server.tool()
+    def list_contact_tasks(
+        scope: Scope, policy_ids: list[str], limit: int = 30
+    ) -> dict:
+        """Read tasks for a scope and selected policies, including current revisions and recent delivery states. Returns at most 100 tasks, newest due time first. Only a sent delivery receipt confirms sending."""
+        return ContactTasks(engine, scope, policy_ids).list(limit)
+
+    @server.tool()
+    def manage_contact_task(
+        scope: Scope,
+        policy_ids: list[str],
+        task_id: str,
+        expected_revision: int,
+        action: Literal["cancel", "pause", "resume", "snooze", "confirm"],
+        due_at: str | None = None,
+    ) -> dict:
+        """Change a scoped task using its current revision. snooze requires a timezone-aware due_at. Read again after a revision conflict. confirm approves a suggestion under the configured policy; it does not bypass delivery settings or confirm sending."""
+        return ContactTasks(engine, scope, policy_ids).manage(
+            task_id, expected_revision, action, due_at
+        )
 
     @server.tool()
     def memory_status() -> dict:

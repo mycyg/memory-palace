@@ -14,6 +14,7 @@ MemoryPalace is a single-user memory system for tool collaboration, companionshi
 - **Background organization:** Extract memories from sources, propose resolutions for conflicts and organize topic families and narrative volumes. Summaries, diaries and portraits cite their sources. Organization results support revision and rollback.
 - **Files and media:** Import PDF, DOCX, PPTX, XLSX, Markdown, HTML, CSV, images, audio and video. Records retain references to source pages, paragraphs, tables, timestamps and attachments.
 - **Active contact:** Configure reminders, commitment follow-ups, anniversaries, check-ins and greetings by role, with timezone, quiet hours, frequency and confirmation settings. Snooze or cancel pending messages. Pending messages and delivery history survive restarts.
+- **Task tools:** Codex and other MCP hosts can create, inspect and manage scoped reminders with conversation provenance, revisions and delivery states. See the [MCP and Python task guide](docs/contact-tasks.md).
 - **Console:** Check processing status, browse records, trace sources and compare revisions. The console also has a timeline, calendar, 2D/3D topic views, knowledge and attachment browsing, diaries, a recall lab, contact settings and data maintenance.
 
 Model-generated content is labeled as such. Inferences, explicit user statements and observed operations are recorded with distinct authority. Citing the same source repeatedly does not add independent evidence.
