@@ -1,5 +1,7 @@
 # Functional coverage
 
+> **Historical 1.x comparison.** This matrix is retained as a record of the earlier release. It is not a 2.0 feature list or acceptance criterion. See [the current architecture](architecture.md).
+
 SCARLETT entries below reflect the supplied architecture image. Its implementation and runnable benchmark adapter were not supplied. “Diagram” describes the reference evidence; it is not a verified implementation or performance result.
 
 | Area | SCARLETT reference | MemoryPalace 1.0 |

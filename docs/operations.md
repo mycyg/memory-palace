@@ -1,89 +1,79 @@
 # Installation and operations
 
-## Install from the GitHub checkout
+## Install and run
 
-Python 3.11–3.13, Node.js 22 and a local SSD are the tested development combination. Runtime support is macOS and Linux. Build the bundled console before building a Python wheel; package-registry publication is separate from this GitHub release.
+MemoryPalace 2.0 requires Python 3.10 or newer. The basic `eventmem` installation uses SQLite and does not require a model, a private configuration file, or Node.js at runtime. A built wheel includes the browser console. Building the console from a Git checkout requires Node.js 22 and npm.
 
 ```sh
 git clone https://github.com/mycyg/memory-palace.git
 cd memory-palace
-uv sync --frozen --extra all --extra dev
+uv sync --frozen
+uv run eventmem serve --root /private/work-memory
+```
+
+The service listens on `127.0.0.1:8319`; run `eventmem console --root /private/work-memory` instead of `serve` to start it and open its browser UI. `EVENTMEM_HOME` changes the default data root. Use a separate root for each isolated dataset. The root contains SQLite data, source snapshots, a local service token, and generated files; treat it as private.
+
+The CLI can receive and recall without a running server. HTTP, SDK, and service-based plugins need the server. `eventmem mcp --root /private/work-memory` starts a stdio MCP server. Streamable HTTP MCP is available from the running service. The Python and TypeScript SDKs are generated from the current [OpenAPI contract](../contracts/openapi.json).
+
+## Optional dependencies and models
+
+Install only the extras you use: `vector` for vector storage, `graph` for clustering, `media` for richer file parsing, or `local-embedding` for an optional local embedding service. `all` combines vector, graph, and media. The local model is opt-in and may download weights; see [local embeddings](local-embedding.md).
+
+Model roles can be configured in the console or through `PUT /v1/settings/models`. This endpoint replaces the role map, so retain existing roles when updating it. Keys are supplied through environment variables named by `api_key_env`, not embedded in the role configuration. No endpoint is mandatory for source receipt, corrections, checkpoints, or lexical recall. A job that needs an unconfigured role remains visible as waiting for configuration.
+
+## Host integrations
+
+Codex, Claude Code, and DeepSeek Harness plugins call the same local service. They use stable source identities and a local offline spool for observations. They do not maintain a legacy file-store runtime or another memory engine. The host controls whether and when context is injected; explicit MCP calls remain available. See the [Codex guide](codex.md) and each plugin's own README for installation.
+
+An HTTP client sends the local bearer token from `<root>/local-token`. The service defaults to loopback and does not provide multi-user authorization. Keep the token and root private. A plugin's accepted spool entry is an observation queued for receipt, not proof that the service stored it until a receipt is returned.
+
+## Upgrade and recovery
+
+Version 2.0 changes some 1.x public interfaces. Back up the old root first and migrate into a distinct empty target:
+
+```sh
+eventmem migrate /old/store --root /private/work-memory-v2 --scope '{"project":"work"}'
+eventmem backup /private/backups/work-memory.tar.gz --root /private/work-memory-v2
+eventmem restore /private/backups/work-memory.tar.gz --root /another/empty/root
+eventmem export /private/exports/work-memory.jsonl --root /private/work-memory-v2
+```
+
+`migrate` accepts a 1.x `memory.sqlite3` file or its containing directory, and the older `.memory` file store. The optional `--scope` assigns a scope only to historical file stores, which did not contain one; SQLite migration preserves every original row scope. Migration reads the old store without modifying it and publishes the target only after validation. Source snapshots and known revision history are preserved where the source format contains them. Derived indexes are rebuilt in the target. Running jobs are made retryable. Unfinished 1.x summary jobs with eligible source records become event summary jobs; those without eligible records complete without a model call. Unfinished diary, portrait, self-narrative, and prediction jobs are preserved as canceled, with a retirement error and per-kind counts in `migration-report.json`. An in-flight external callback becomes uncertain and requires reconciliation before another send. External conversation pointers remain unverified until their source is separately available. Inspect the migration report and compare scoped recall before selecting the new root.
+
+Legacy `diary`, `portrait`, `self_narrative`, and `prediction` records remain available for historical or audit reads. Version 2.0 rejects new records of those retired kinds.
+
+A backup restores into an empty root. Exported or downloaded files are independent copies of the data and are not removed by a record deletion. Permanent deletion follows source and derived-record dependencies in the active store; retain an isolated backup if you need a reversible recovery path.
+
+## Reminders and callbacks
+
+A reminder is an explicit schedule tied to an existing record and policy. The default policy does not send. A worker in `eventmem serve` evaluates due schedules; a configured callback can receive delivery attempts. The host owns recipients, authentication, and actual channel behavior. See [work reminders](reminders.md) for the request shape and callback idempotency rules.
+
+## Validate a checkout
+
+```sh
+uv sync --frozen --extra dev
+uv run pytest -q
 npm ci --prefix sdk/typescript
 npm run build --prefix sdk/typescript
+npm test --prefix sdk/typescript
+npm ci --prefix dsh-plugin
+npm run typecheck --prefix dsh-plugin
+npm test --prefix dsh-plugin
+npm run build --prefix dsh-plugin
 npm ci --prefix console
 npm run build --prefix console
-uv run eventmem console
-```
-
-Use `eventmem serve` without opening the console. Both listen on `127.0.0.1:8319`. `--root /private/path` selects a separate database. `EVENTMEM_HOME` provides the same default for the service and host bridges; `EVENTMEM_URL` selects the bridge URL. Keep the service running while using automatic host integration. Model-free receipt, FTS recall, revision and provenance remain available without optional endpoint configuration.
-
-## Models
-
-Configure roles in the console, or with `eventmem api PUT /v1/settings/models --json '<configuration>'`. The settings API replaces the role map, so include existing roles when updating it. Example (substitute your own endpoint/model; this is not a working credential):
-
-```json
-{
-  "extraction": {"endpoint":"http://127.0.0.1:8000/v1","model":"configured-model","protocol":"openai","timeout_seconds":60},
-  "embedding": {"endpoint":"http://127.0.0.1:8001/v1","model":"configured-embedding","dimensions":1024,"preprocessing":"text-v1"}
-}
-```
-
-OpenAI-compatible JSON chat, embeddings and ASR endpoints and Anthropic Messages JSON roles are supported. `api_key_env` names an environment variable available to the service; it never stores the secret value. Roles are extraction, conflict, summary, rerank, embedding, visual_embedding, vision, ASR, prediction, query, answer and judge. Visual embedding requires the documented multimodal schema. Prices are optional per-million input/output settings; zero/unconfigured prices do not establish that a remote model was free.
-
-A role configuration update makes waiting tasks retryable. The jobs view exposes failures, cancellation and retries. Source receipt, mechanical parsing and model completion have independent states. Background jobs are incremental and delay new work during interactive requests. Heavy decoding and optional full-layout model execution can still consume CPU/RAM; run a separate worker process when process-level resource controls are needed.
-
-## Host connections
-
-Codex: run `eventmem codex install --project /path/to/project`, restart Codex, and review/trust the generated native definitions with `/hooks`. Prompts, final replies and tool results are collected through stable lifecycle fields; startup, prompt and tool hooks return bounded context. Add the MCP configuration for explicit memory tools. The [Codex guide](codex.md) covers scope sharing, ACP/WeChat, offline recovery and removal.
-
-Claude Code: load the checkout as a plugin with `claude --plugin-dir /absolute/path/to/memory-palace`; its `hooks/hooks.json` handles session start, prompts, pre/post tool use, compaction and exit. The plugin launcher selects its checkout `.venv` or `EVENTMEM_PYTHON`. See the [Claude Code plugin reference](https://code.claude.com/docs/en/plugins-reference). PreCompact captures the transcript and checkpoint; the subsequent SessionStart with source `compact` restores the context budget and injects the current working set. See [hook lifecycle semantics](https://code.claude.com/docs/en/hooks#sessionstart). Offline spool replay records receipt without consuming the live injection budget. The legacy hook modules remain importable for existing configurations; migrate to the bridge to use the 1.0 core.
-
-DeepSeek Harness: build `dsh-plugin` with `npm ci`, `npm run build`, then install the local `dsh-eventmem` bundle using the harness plugin workflow. The default transport calls the service. `legacyMode: true` retains the old file-based adapter for rollback. User and assistant messages retain their distinct source authority; injected plugin messages do not become user statements.
-
-MCP stdio:
-
-```json
-{"mcpServers":{"memorypalace":{"command":"/absolute/path/to/.venv/bin/eventmem","args":["mcp","--root","/private/path"]}}}
-```
-
-Streamable HTTP is available at `http://127.0.0.1:8319/mcp/` with the local bearer token. MCP by itself provides explicit tool reads and writes; it does not observe a host's conversation or inject passive context automatically.
-
-Record lists contain bounded previews; open a record to read its content in cursor-based segments. The correction editor reads all segments at a consistent revision before editing.
-
-## Migrate, recover and delete
-
-```sh
-eventmem migrate /old/project/.memory --root /isolated/memorypalace --scope '{"project":"my-project"}'
-eventmem backup /private/backups/memory.tar.gz --root /isolated/memorypalace
-eventmem restore /private/backups/memory.tar.gz --root /another/empty/root
-eventmem export /private/exports/memory.jsonl --root /isolated/memorypalace
-```
-
-Migration copies source snapshots and archive packages, preserves original ids and links, validates integrity, and writes a migration report. External conversation pointers remain explicitly unverified until separately imported. The target must be empty and separate from the old directory. Compare recall from the same snapshot before selecting the new root. Restoring a backup also requires a separate empty target; the console restores into a new staging directory and reports its location.
-
-Archive keeps provenance and history. Permanent deletion erases the selected source closure and dependent records, tombstones the source ids and invalidates caches/indexes. Exports and backup files, including files previously generated in the root's `exports` folder, are independent copies and must be deleted separately when appropriate. Restoring an older backup intentionally restores its historical snapshot; it does not consult a later database's tombstones.
-
-## Contact callbacks
-
-MCP and Python hosts can create, inspect and change source-backed reminders using the [contact task tools](contact-tasks.md). Configure a scoped policy first. Keep `eventmem serve` running for the worker to process due schedules. Model-composed reminder text retains model provenance; revisions and callback receipts distinguish scheduled tasks from delivered messages.
-
-Start `uvicorn examples.v1.callback:app --host 127.0.0.1 --port 8320`. Configure a policy with a matching scope and `http://127.0.0.1:8320/callback`, then schedule a supported record. Enable automatic sending only through the policy settings. Default policies generate suggestions. `EVENTMEM_WEBHOOK_SECRET` signs the body; the example validates it when set. Its effect and delivery inbox commit in one SQLite transaction. External effects require the downstream service's own idempotency mechanism. Non-idempotent uncertain deliveries remain visible for reconciliation.
-
-## Reproduce checks
-
-```sh
-uv run pytest -q
-npm test --prefix sdk/typescript
-npm test --prefix dsh-plugin
-npm test --prefix console
 uv run python scripts/generate_contract.py
 npm run generate --prefix sdk/typescript
-npm ci
-npm run docs:render
-uv run eventmem evaluate --output /tmp/replay.json
-uv run eventmem benchmark --scale full --root /tmp/new-scale-root --output /tmp/scale.json
+git diff --exit-code -- contracts src/eventmem/sdk sdk/typescript/src
+node scripts/check-docs.mjs
 uv build
 uv run python scripts/check_wheel.py
 ```
 
-Scale fixtures need an empty root and roughly 10 GB disk space. The full test creates 100,000 memories, 1,000,000 knowledge vectors and corresponding SQLite records, and reports actual hardware and all target checks. CI runs routine tests; the scale workflow is separately invocable. The legacy replay adapter reads the fixed historical git commit, so use a full GitHub checkout for that comparison.
+The wheel check verifies the console assets, CLI entry point, typed SDK, and absence of private/runtime files. Browser tests additionally need Playwright Chromium. The manual synthetic benchmark uses one temporary, model-free work corpus and writes its raw observations:
+
+```sh
+uv run python scripts/benchmark_work_memory.py --output /tmp/work-memory-benchmark.json
+```
+
+This benchmark reports recall hits, token counts, and local timing without a pass/fail latency threshold. Its process cache is cleared for one measurement, but the operating-system filesystem cache is not. See the [2.0 synthetic report and raw data](benchmarks/work-memory-v2.md). The [1.x results](performance.md) use different fixtures.

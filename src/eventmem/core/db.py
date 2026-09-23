@@ -29,6 +29,7 @@ CREATE INDEX IF NOT EXISTS record_scope ON records(scope,deleted,status,kind,upd
 CREATE INDEX IF NOT EXISTS record_constraints ON records(scope) WHERE deleted=0 AND status='active' AND json_extract(data,'$.attributes.constraint')=1;
 CREATE INDEX IF NOT EXISTS record_startup ON records(scope,(CASE kind WHEN 'checkpoint' THEN 0 WHEN 'commitment' THEN 1 WHEN 'preference' THEN 2 ELSE 3 END),importance DESC,updated_at DESC) WHERE deleted=0 AND status='active';
 CREATE INDEX IF NOT EXISTS record_parent ON records(parent_id);
+CREATE INDEX IF NOT EXISTS record_self_knowledge ON records(scope,json_extract(data,'$.attributes.self_knowledge.entry')) WHERE deleted=0;
 CREATE TABLE IF NOT EXISTS revisions(
  record_id TEXT NOT NULL, revision INTEGER NOT NULL, changed_at TEXT NOT NULL,
  action TEXT NOT NULL, reason TEXT NOT NULL, data TEXT NOT NULL,
@@ -54,6 +55,10 @@ CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY, kind TEXT NOT NULL, unique_
 CREATE INDEX IF NOT EXISTS job_claim ON jobs(state,available,lease_until);
 CREATE TABLE IF NOT EXISTS job_dependencies(job_id TEXT NOT NULL, dependency_id TEXT NOT NULL,
  PRIMARY KEY(job_id,dependency_id));
+CREATE TABLE IF NOT EXISTS job_recovery(job_id TEXT NOT NULL, command_id TEXT NOT NULL,
+ kind TEXT NOT NULL, target TEXT NOT NULL, prev_state TEXT NOT NULL, prev_error TEXT,
+ prev_attempts INTEGER NOT NULL, recovered_at TEXT NOT NULL,
+ PRIMARY KEY(job_id,command_id));
 CREATE TABLE IF NOT EXISTS families(id TEXT PRIMARY KEY, scope TEXT NOT NULL, kind TEXT NOT NULL,
  state TEXT NOT NULL, revision INTEGER NOT NULL, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS family_revisions(id TEXT NOT NULL, revision INTEGER NOT NULL, data TEXT NOT NULL,
@@ -108,11 +113,26 @@ def tokenize(text: str) -> str:
 
 
 class Conflict(Exception):
-    pass
+    """Static host message plus optional structured facts. The message stays the
+    only positional argument, so str() and the HTTP 409 mapping never change.
+
+    `kind` describes what moved, not what to do
+    about it. A raise site that leaves it None is classified by the registry."""
+
+    def __init__(self, message="", *, kind=None, code=None, target=None, expected=None, actual=None):
+        super().__init__(message)
+        self.kind, self.code, self.target = kind, code, target
+        self.expected, self.actual = expected, actual
 
 
 class Missing(Exception):
-    pass
+    """A reference that is gone. It takes the same optional facts as Conflict and
+    stays a separate class, so every `except Conflict` keeps its current reach."""
+
+    def __init__(self, message="", *, kind=None, code=None, target=None, expected=None, actual=None):
+        super().__init__(message)
+        self.kind, self.code, self.target = kind, code, target
+        self.expected, self.actual = expected, actual
 
 
 class Deleted(Conflict):
@@ -128,6 +148,12 @@ class Database:
         self.blobs.mkdir(exist_ok=True, mode=0o700)
         with self.connect() as conn:
             conn.executescript(SCHEMA)
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
+            if "priority" not in columns:
+                conn.execute("ALTER TABLE jobs ADD COLUMN priority INTEGER NOT NULL DEFAULT 50")
+            conn.execute("CREATE INDEX IF NOT EXISTS source_namespace ON sources(namespace)")
+            from .read_policy import SCHEMA as READ_POLICY_SCHEMA
+            conn.executescript(READ_POLICY_SCHEMA)
         os.chmod(self.path, 0o600)
 
     @contextmanager
@@ -181,6 +207,7 @@ class Database:
         return key
 
     def metric(self, name, value, data=None):
+
         from .models import now
 
         with self.connect(write=True) as conn:
@@ -188,7 +215,9 @@ class Database:
                 "INSERT INTO metrics(name,value,created_at,data) VALUES(?,?,?,?)",
                 (name, value, now(), dumps(data or {})),
             )
-            # Bound telemetry independently of user memories.
-            conn.execute(
-                "DELETE FROM metrics WHERE id < (SELECT MAX(id)-20000 FROM metrics)"
-            )
+            # Bound telemetry independently of user memories. One ring shared by every
+            # name is the same bound applied in the wrong place: it lets a name that
+            # fires on every model call evict a name that fires when something rare
+            # goes wrong, which is the one an operator came to read. The ring is per
+            # name behind a flag, and the flag off is this line as it always was.
+            conn.execute("DELETE FROM metrics WHERE name=? AND id < COALESCE((SELECT id FROM metrics WHERE name=? ORDER BY id DESC LIMIT 1 OFFSET 1999),0)", (name,name))

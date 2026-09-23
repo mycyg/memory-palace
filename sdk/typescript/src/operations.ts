@@ -11,15 +11,84 @@ export const operations = {
     "path": "/v1/sources",
     "parameters": [],
     "body": {
+      "required": true,
       "content": {
         "application/json": {
           "schema": {
             "$ref": "#/components/schemas/SourceInput"
           }
         }
-      },
-      "required": true
+      }
     }
+  },
+  "list_sources": {
+    "method": "GET",
+    "path": "/v1/sources",
+    "parameters": [
+      {
+        "name": "project",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "default": "personal",
+          "title": "Project"
+        }
+      },
+      {
+        "name": "persona",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "default": "default",
+          "title": "Persona"
+        }
+      },
+      {
+        "name": "collection",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "default": "default",
+          "title": "Collection"
+        }
+      },
+      {
+        "name": "world",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "default": "real",
+          "title": "World"
+        }
+      },
+      {
+        "name": "cursor",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "default": "",
+          "title": "Cursor"
+        }
+      },
+      {
+        "name": "limit",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "integer",
+          "maximum": 200,
+          "minimum": 1,
+          "default": 50,
+          "title": "Limit"
+        }
+      }
+    ],
+    "body": {}
   },
   "receive_batch": {
     "method": "POST",
@@ -314,10 +383,7 @@ export const operations = {
         "schema": {
           "anyOf": [
             {
-              "enum": [
-                "diary",
-                "timeline"
-              ],
+              "const": "timeline",
               "type": "string"
             },
             {
@@ -356,6 +422,21 @@ export const operations = {
         "application/json": {
           "schema": {
             "$ref": "#/components/schemas/RecallRequest"
+          }
+        }
+      },
+      "required": true
+    }
+  },
+  "settle_context_delivery": {
+    "method": "POST",
+    "path": "/v1/context/receipts",
+    "parameters": [],
+    "body": {
+      "content": {
+        "application/json": {
+          "schema": {
+            "$ref": "#/components/schemas/ContextReceipt"
           }
         }
       },
@@ -733,6 +814,22 @@ export const operations = {
     ],
     "body": {}
   },
+  "read_job": {
+    "method": "GET",
+    "path": "/v1/jobs/{job_id}",
+    "parameters": [
+      {
+        "name": "job_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "title": "Job Id"
+        }
+      }
+    ],
+    "body": {}
+  },
   "control_job": {
     "method": "POST",
     "path": "/v1/jobs/{job_id}/{action}",
@@ -985,24 +1082,24 @@ export const operations = {
     ],
     "body": {}
   },
-  "configure_contact": {
+  "configure_reminder_policy": {
     "method": "PUT",
-    "path": "/v1/contact/policies",
+    "path": "/v1/reminders/policies",
     "parameters": [],
     "body": {
       "content": {
         "application/json": {
           "schema": {
-            "$ref": "#/components/schemas/ContactPolicy"
+            "$ref": "#/components/schemas/ReminderPolicy"
           }
         }
       },
       "required": true
     }
   },
-  "list_contact": {
+  "list_reminder_state": {
     "method": "GET",
-    "path": "/v1/contact/{table}",
+    "path": "/v1/reminders/state/{table}",
     "parameters": [
       {
         "name": "table",
@@ -1016,6 +1113,46 @@ export const operations = {
           ],
           "type": "string",
           "title": "Table"
+        }
+      },
+      {
+        "name": "project",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "default": "personal",
+          "title": "Project"
+        }
+      },
+      {
+        "name": "persona",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "default": "default",
+          "title": "Persona"
+        }
+      },
+      {
+        "name": "collection",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "default": "default",
+          "title": "Collection"
+        }
+      },
+      {
+        "name": "world",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "default": "real",
+          "title": "World"
         }
       },
       {
@@ -1043,24 +1180,57 @@ export const operations = {
     ],
     "body": {}
   },
-  "create_schedule": {
+  "create_reminder": {
     "method": "POST",
-    "path": "/v1/contact/schedules",
+    "path": "/v1/reminders",
     "parameters": [],
     "body": {
       "content": {
         "application/json": {
           "schema": {
-            "$ref": "#/components/schemas/ScheduleInput"
+            "$ref": "#/components/schemas/ReminderInput"
           }
         }
       },
       "required": true
     }
   },
-  "change_schedule": {
+  "acknowledge_delivery": {
     "method": "POST",
-    "path": "/v1/contact/schedules/{schedule_id}",
+    "path": "/v1/reminders/outbox/{delivery_id}/ack",
+    "parameters": [
+      {
+        "name": "delivery_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "title": "Delivery Id"
+        }
+      }
+    ],
+    "body": {}
+  },
+  "run_reminders": {
+    "method": "POST",
+    "path": "/v1/reminders/run",
+    "parameters": [
+      {
+        "name": "deliver",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "boolean",
+          "default": false,
+          "title": "Deliver"
+        }
+      }
+    ],
+    "body": {}
+  },
+  "change_reminder": {
+    "method": "POST",
+    "path": "/v1/reminders/{schedule_id}",
     "parameters": [
       {
         "name": "schedule_id",
@@ -1077,44 +1247,11 @@ export const operations = {
       "content": {
         "application/json": {
           "schema": {
-            "$ref": "#/components/schemas/ScheduleChange"
+            "$ref": "#/components/schemas/ReminderChange"
           }
         }
       }
     }
-  },
-  "acknowledge_delivery": {
-    "method": "POST",
-    "path": "/v1/contact/outbox/{delivery_id}/ack",
-    "parameters": [
-      {
-        "name": "delivery_id",
-        "in": "path",
-        "required": true,
-        "schema": {
-          "type": "string",
-          "title": "Delivery Id"
-        }
-      }
-    ],
-    "body": {}
-  },
-  "contact_tick": {
-    "method": "POST",
-    "path": "/v1/contact/tick",
-    "parameters": [
-      {
-        "name": "deliver",
-        "in": "query",
-        "required": false,
-        "schema": {
-          "type": "boolean",
-          "default": false,
-          "title": "Deliver"
-        }
-      }
-    ],
-    "body": {}
   },
   "overview": {
     "method": "GET",
@@ -1137,7 +1274,8 @@ export const operations = {
             "scenarios",
             "connections",
             "maintenance",
-            "parsers"
+            "parsers",
+            "ranking"
           ],
           "type": "string",
           "title": "Key"
@@ -1160,7 +1298,8 @@ export const operations = {
             "scenarios",
             "connections",
             "maintenance",
-            "parsers"
+            "parsers",
+            "ranking"
           ],
           "type": "string",
           "title": "Key"

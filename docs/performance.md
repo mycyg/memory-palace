@@ -1,5 +1,7 @@
 # Measurements and reproducibility
 
+> **Historical 1.x report.** These numbers, baselines, acceptance checks, and reproduction commands describe MemoryPalace 1.0 on the recorded machine. They are not measurements or release gates for 2.0; reproduction requires the 1.0 checkout. See [the current architecture](architecture.md) for the 2.0 product boundary and the separate [2.0 synthetic work-memory report](benchmarks/work-memory-v2.md).
+
 ## Acceptance environment
 
 The release was measured on **10 CPU cores, 64 GiB RAM, SSD, macOS 26.6.1 arm64, Python 3.13.14**. This recorded machine is the acceptance environment. These measurements do not establish performance on an 8-core / 32 GiB machine or on another operating system.

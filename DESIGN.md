@@ -1,5 +1,7 @@
 # 基于事件的 Agent 记忆系统 —— 设计文档
 
+> 历史设计稿（MemoryPalace 0.x）。本文记录当时的探索，不是 2.0 的实现契约；当前架构以 [docs/architecture.md](docs/architecture.md) 为准。
+
 版本：v0.1（2026-08-25）
 状态：讨论稿，待定名
 

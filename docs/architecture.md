@@ -1,59 +1,49 @@
-# MemoryPalace 1.0 architecture
+# MemoryPalace 2.0 architecture
 
-MemoryPalace runs a single-user Python core behind a local service. Hosts, HTTP, MCP, the CLI and both SDKs use the same scope, revision, retrieval and context policy. SQLite is authoritative. Vector tables, FTS entries, topic layouts and caches can be rebuilt.
+MemoryPalace is a work memory library behind one local Python service. Its CLI, HTTP and MCP interfaces, SDKs, and host plugins use the same source, revision, and retrieval rules. SQLite is the sole authoritative runtime store. Full-text indexes, optional vector indexes, graph layouts, and context caches are derived data that can be rebuilt.
 
-![Overview](diagrams/overview.svg)
+```text
+Host events / files / API calls
+             ↓
+    immutable source snapshot
+             ↓
+ SQLite records + revisions + evidence links
+             ↓
+ jobs, summaries, sessions, checkpoints
+             ↓
+ scope + time + budget checked recall
+             ↓
+       host reads context
+```
 
-## Data and identity
+The host owns its conversation, tools, task execution, and delivery channel. MemoryPalace does not run an agent.
 
-Every source has a stable `(namespace, key, version, scope)` identity, a content hash, a durable snapshot, effective time, receipt time and independent mechanical/model progress. A scope contains `project`, `persona`, `collection` and `world`. Cross-project preferences are shared only when explicitly recorded in the shared preference scope; fictional and real-world claims stay separate.
+## Sources, records, and time
 
-Records cover episodes, facts, states, preferences, procedures, relationships, commitments, reminders, predictions, diaries, summaries, portraits, self narratives, knowledge, checkpoints and observations. Evidence links preserve the source and record dependencies. Distinct content hashes measure independent sources; repeated citations of one source add no independent evidence. Generated text retains its generated attribute. An inferred user fact cannot silently become an explicit assertion.
+A source has a stable `(namespace, key, version, scope)` identity, a content hash, a durable snapshot, an event time, and a receipt time. Retrying the same source is idempotent; changing content under an existing identity is a conflict. A scope separates projects and collections. The optional `persona` dimension is a generic agent namespace and does not activate character behavior.
 
-Revisions append history with compare-and-swap checks and stable command ids. Correction, confirmation, replacement, coexistence, refutation, retraction, archive, restore and rollback have distinct semantics. Document updates follow effective time. Checkpoints supersede earlier checkpoints for the same session. Historical reads distinguish effective time from the information available at the query cutoff.
+Sources can create records such as observations, episodes, facts, procedures, commitments, reminders, knowledge, summaries, and checkpoints. Evidence links connect a record to its sources. Explicit statements, observed operations, documents, and model output retain distinct authority labels. Generated interpretations remain marked as generated.
 
-## Durable processing
+Record changes append revisions and require the expected revision plus a stable command ID. Correction, replacement, confirmation, retraction, refutation, archive, restore, and rollback have distinct effects. Current reads check the effective state. Historical reads can use both event time and the time information became known, so a later correction is not silently inserted into an earlier answer.
 
-![Write and correction](diagrams/write-correct.svg)
+## Work continuity
 
-Receipt fsyncs an immutable content-addressed blob and commits source metadata before returning success. Jobs have stable keys, dependencies, leases, fencing, heartbeat renewal, retries, cancellation and configuration-wait states. An expired worker cannot commit after another worker owns its job. Duplicate callbacks and source retries resolve to the existing operation; changed payloads under the same id are rejected.
+A session boundary can record a checkpoint with goals, confirmed progress, unverified results, and a next entry point. Checkpoints, commitments, and procedures are ordinary source-linked records; there is no separate task executor. Summaries and topic families organize existing evidence. The organizer can propose candidate groups, while publication and revision remain explicit operations.
 
-Large text extraction uses bounded batches and a dependent finalization job. All batches must complete before model progress becomes complete. Images, audio segments and video keyframes retain independent analysis tasks. Missing vision or ASR configuration does not discard the source or decoded pieces. Model outputs are proposals; validated program operations control canonical state.
+A host may send message and tool observations through a service plugin. The plugin keeps a bounded local spool during service interruption and retries receipt with stable identities. Replayed observations are records of what the host saw; they do not by themselves consume the live context budget or prove the host completed a task.
 
-Source deletion removes associated records, dependent generated accounts, revisions, attachment references, cached context and index entries. Tombstones prevent queued retries from re-creating erased sources. Vector purge removes obsolete index versions. Exported files and backups are independent copies and need their own retention management; this is logical deletion, not a claim of forensic disk erasure.
+Automatic event grouping works on a bounded set of changed, source-backed records and reuses the existing family and member structures. Summaries split evidence into input batches of at most 6,000 tokens and reject output above 2,000 tokens. A family summary is refreshed when member revisions or the configured summary model change; the original sources remain readable.
 
-## Retrieval and context
+## Processing and retrieval
 
-![Recall and context](diagrams/recall-context.svg)
+Receipt commits the source before any optional model work begins. Persistent jobs track extraction, parsing, indexing, and summarization. Missing model configuration leaves dependent work visible for later processing; it does not erase the source. Revisions and deletions invalidate derived entries and context caches.
 
-The fast path uses exact ids, scope-filtered FTS candidates, precomputed cues, relation links and an in-memory cache without a generation request. Lexical candidate selection takes up to 400 recent scoped matches and ranks that bounded set with BM25. This gives predictable common-word latency but can miss an older globally stronger lexical match. Deep mode ranks the full FTS match set, adds optional query expansion, embedding, multimodal embedding and reranking. Every index result is checked against the current SQLite scope, status and revision before use.
+Recall combines exact cues and SQLite full-text search with any configured vector and relation candidates. Every returned record is checked against scope, revision, status, time, and evidence policy after candidate generation. A token budget bounds assembled context; `fast` favors bounded latency and `deep` can examine a wider lexical set. The API also provides bounded reads of records, source snapshots, revisions, attachments, and processing state.
 
-LanceDB separates tables by model, dimension and preprocessing identity. IVF_HNSW_SQ is built for sufficiently large tables; small tables remain exact. Queries inspect newly added unindexed rows. Model changes create a new isolated table. Text and visual representations occupy different preprocessing namespaces. [LanceDB index capabilities](https://docs.lancedb.com/indexing/vector-index).
+Session recall prepares a context delivery ID and body hash. Preparation does not consume the session's context budget. The host reports `sending`, `unconfirmed`, or `accepted` to `POST /v1/context/receipts`; only acceptance of the exact body updates the budget and seen-record ledger. A compaction boundary starts a new context window. A session boundary can also report `foreground_seconds` (up to one hour) so background jobs yield while foreground work is active.
 
-Context uses `cl100k_base` token accounting; hosts using other tokenizers should lower budgets if needed. Default startup budgets are 2,000 / 4,000 / 2,000 tokens for tool / companion / knowledge, and passive budgets are 256 / 512 / 256. Cumulative append-only budgets default to 12,000 / 16,000 / 12,000. Explicit reads share session accounting and return bounded segments. Constraints and predictions have separate accounts. Compact boundaries reset the context ledger. Event bodies are read whole when they fit; otherwise the host receives a labeled read hint. Display, reading, adoption, verified outcome, correction and same-file observation are separate feedback signals.
+## Optional facilities
 
-## Organization and continuity
+Document, image, audio, and video processing may require parser packages or configured model endpoints. Vector storage and graph clustering are optional extras. A reminder schedule references an existing record and follows a policy. A due reminder can produce a suggestion or call a configured host callback; the host selects the recipient and performs any external effect. Callback delivery IDs and acknowledgment state support reconciliation.
 
-![Background processing](diagrams/background.svg)
-
-Changed records and bounded neighbors feed igraph Leiden community discovery. Exact topic labels and stored relations create candidate connections; communities do not confirm facts. Families and volumes support candidate/publication state, explicit membership, merge, split, revisions and rollback. The console loads at most 300 graph nodes and uses stored layouts for generated communities.
-
-Configured background jobs generate diaries, summaries, portraits, self narratives and tentative predictions with cited record ids. Corrections mark dependent generated accounts unverified transitively. Checkpoints retain goals, confirmed progress, unverified results, blockers, commitments and the next entry separately. Checkpoint cues can prefetch relevant records; final recall still checks validity.
-
-## Multimodal sources
-
-Markdown/plain text/CSV retain paragraph offsets or row locations. Docling handles office documents and HTML with native structure and provenance. PDF defaults to Docling's native text-cell backend; scanned pages use the configured vision service. Full local Docling layout parsing is an opt-in parser setting. Audio uses FFmpeg segments and configured ASR; video also keeps periodic keyframes. Text transcripts, page coordinates, original attachments and bounded clips remain linked. [Docling supported formats](https://docling-project.github.io/docling/usage/supported_formats/).
-
-Visual embedding uses the Jina-compatible `/embeddings` image/text object schema. A compatible configured endpoint is required; it is separate from a text-only embedding service. [Multimodal embedding schema](https://jina.ai/en-US/embeddings/).
-
-## Active contact
-
-![Contact scheduling](diagrams/proactive-contact.svg)
-
-Per-role policies specify channel, triggers, allowed memory kinds, timezone, quiet hours, interval, daily limit and confirmation. Unconfigured installations produce suggestions. Sending rechecks the schedule and its referenced memory. Durable outbox claims precede the network call. A crashed or unacknowledged non-idempotent send becomes uncertain. Idempotent hosts can retry the stable delivery id and use the SDK's transactional inbox. Pause, resume, cancel and snooze use revision checks. A completed cancellation prevents later send initiation; an already accepted remote effect cannot be recalled.
-
-## Interfaces and trust
-
-FastAPI serves `/v1`, the bundled React console and authenticated MCP Streamable HTTP. MCP also supports stdio. [MCP transport specification](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports). MCP provides tool access; automatic capture and passive injection require a host event adapter. Claude Code and DeepSeek Harness adapters spool receipt events when the service is unavailable. Their common service handles ranking and context policy.
-
-The service listens on loopback and checks bearer credentials, Host and Origin. Model secrets are environment references. Source text, documents and returned memory are data and have no instruction authority. The private root defaults to `~/.memorypalace`; it is outside the repository. No accounts platform or platform-specific chat client is included.
+The local service binds to loopback by default and uses a token stored under its root. Plugins and SDKs call that service; MCP stdio can use the same local root. Backups, exports, and migrations are explicit operations. See [operations](operations.md) for installation, data migration, and release checks.

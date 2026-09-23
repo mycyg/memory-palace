@@ -10,21 +10,18 @@ class Body_upload_source(TypedDict, total=False):
     metadata: Required[str]
     file: Required[str]
 
-class ContactPolicy(TypedDict, total=False):
-    id: str
+class ContextDelivery(TypedDict, total=False):
+    id: Required[str]
+    body_hash: Required[str]
+    epoch: Required[int]
+    state: Required[Literal['prepared', 'sending', 'unconfirmed', 'accepted']]
+
+class ContextReceipt(TypedDict, total=False):
+    session: Required[str]
     scope: Scope
-    enabled: bool
-    channel: str | None
-    timezone: str
-    quiet_start: int
-    quiet_end: int
-    max_per_day: int
-    min_interval_minutes: int
-    require_confirmation: bool
-    idempotent_channel: bool
-    greeting_text: str
-    triggers: list[Literal['reminder', 'commitment', 'anniversary', 'checkin', 'greeting']]
-    allowed_kinds: list[Literal['episode', 'fact', 'state', 'preference', 'procedure', 'relationship', 'commitment', 'reminder', 'prediction', 'diary', 'summary', 'portrait', 'self_narrative', 'knowledge', 'checkpoint', 'observation']]
+    delivery_id: Required[str]
+    body_hash: Required[str]
+    state: Required[Literal['sending', 'unconfirmed', 'accepted']]
 
 class CreateRecord(TypedDict, total=False):
     record: Required[RecordInput]
@@ -42,7 +39,7 @@ class FamilyCreate(TypedDict, total=False):
     scope: Scope
     title: Required[str]
     members: Required[list[str]]
-    kind: Literal['family', 'volume']
+    kind: Literal['family', 'volume', 'event']
 
 class FeedbackRequest(TypedDict, total=False):
     record_id: Required[str]
@@ -59,8 +56,9 @@ class HostEvent(TypedDict, total=False):
     payload: Required[dict[str, Any]]
 
 class MaintenanceRequest(TypedDict, total=False):
-    kind: Required[Literal['organize', 'diary', 'summary', 'portrait', 'self_narrative', 'prediction', 'rebuild', 'build_vectors', 'purge_vectors']]
+    kind: Required[Literal['organize', 'event_group', 'event_summary', 'rebuild', 'build_vectors', 'purge_vectors']]
     scope: Scope
+    family_id: str | None
     since: str
     command_id: Required[str]
     title: str
@@ -71,11 +69,13 @@ class ModelRole(TypedDict, total=False):
     protocol: Literal['openai', 'anthropic']
     api_key_env: str | None
     timeout_seconds: float
+    max_output_tokens: int
+    reasoning_effort: str | None
     dimensions: int | None
     preprocessing: str
     local_embedding: bool
-    input_price_per_million: float
-    output_price_per_million: float
+    input_price_per_million: float | None
+    output_price_per_million: float | None
 
 class RecallItem(TypedDict, total=False):
     id: Required[str]
@@ -92,7 +92,7 @@ class RecallItem(TypedDict, total=False):
 class RecallRequest(TypedDict, total=False):
     query: str
     scope: Scope
-    scenario: Literal['tool', 'companion', 'knowledge', 'research', 'creative', 'support', 'operations']
+    scenario: Literal['tool', 'knowledge', 'research', 'creative', 'support', 'operations']
     mode: Literal['fast', 'deep']
     at: str | None
     known_at: str | None
@@ -107,6 +107,7 @@ class RecallRequest(TypedDict, total=False):
     vector: list[float] | None
     index: str | None
     explain: bool
+    recall_purpose: Literal['experience_recall', 'audit']
 
 class RecallResult(TypedDict, total=False):
     items: Required[list[RecallItem]]
@@ -119,6 +120,7 @@ class RecallResult(TypedDict, total=False):
     cursor: Required[str | None]
     session_used: Required[int]
     instruction_authority: Required[str]
+    delivery: ContextDelivery | None
 
 class RecordInput(TypedDict, total=False):
     id: str | None
@@ -161,6 +163,34 @@ class RelationRequest(TypedDict, total=False):
     object: Required[str]
     attributes: dict[str, Any]
 
+class ReminderChange(TypedDict, total=False):
+    expected_revision: Required[int]
+    action: Required[Literal['cancel', 'pause', 'resume', 'snooze', 'confirm']]
+    due_at: str | None
+
+class ReminderInput(TypedDict, total=False):
+    command_id: Required[str]
+    policy_id: str
+    record_id: Required[str]
+    due_at: Required[str]
+    trigger: Literal['reminder', 'commitment']
+    recurrence: Literal['none', 'daily', 'weekly', 'yearly']
+
+class ReminderPolicy(TypedDict, total=False):
+    id: str
+    scope: Scope
+    enabled: bool
+    channel: str | None
+    timezone: str
+    quiet_start: int
+    quiet_end: int
+    max_per_day: int
+    min_interval_minutes: int
+    require_confirmation: bool
+    idempotent_channel: bool
+    triggers: list[Literal['reminder', 'commitment']]
+    allowed_kinds: list[Literal['episode', 'fact', 'state', 'preference', 'procedure', 'relationship', 'commitment', 'reminder', 'prediction', 'diary', 'summary', 'portrait', 'self_narrative', 'knowledge', 'checkpoint', 'observation']]
+
 class RevisionInput(TypedDict, total=False):
     expected_revision: Required[int]
     command_id: Required[str]
@@ -170,19 +200,6 @@ class RevisionInput(TypedDict, total=False):
     replacement_id: str | None
     target_revision: int | None
     attributes: dict[str, Any] | None
-
-class ScheduleChange(TypedDict, total=False):
-    expected_revision: Required[int]
-    action: Required[Literal['cancel', 'pause', 'resume', 'snooze', 'confirm']]
-    due_at: str | None
-
-class ScheduleInput(TypedDict, total=False):
-    command_id: Required[str]
-    policy_id: str
-    record_id: Required[str]
-    due_at: Required[str]
-    trigger: Literal['reminder', 'commitment', 'anniversary', 'checkin', 'greeting']
-    recurrence: Literal['none', 'daily', 'weekly', 'yearly']
 
 class Scope(TypedDict, total=False):
     project: str
@@ -200,10 +217,11 @@ class SessionBoundary(TypedDict, total=False):
     session: Required[str]
     scope: Scope
     event: Required[Literal['start', 'end', 'compact', 'checkpoint']]
-    scenario: Literal['tool', 'companion', 'knowledge']
+    scenario: Literal['tool', 'knowledge']
     host_mode: Literal['append', 'replace']
     command_id: Required[str]
     checkpoint: dict[str, Any]
+    foreground_seconds: float
 
 class SourceInput(TypedDict, total=False):
     namespace: Required[str]

@@ -1,5 +1,7 @@
 # eventmem 第二宿主适配规格：DeepSeek Harness (dsh)
 
+> 历史调研文档（MemoryPalace 0.x）。本文中的文件存储兼容路线和配置示例不适用于 2.0；当前插件采用服务接口，参见 [dsh-plugin/README.md](dsh-plugin/README.md)。
+
 调研对象：`deepseek-harness` @ `0.1.1-rc.2`，git `b150a55`（仓库根 `package.json:3`）。
 
 本文所有 dsh 源码路径相对于 dsh 仓库根。所有 API 断言都给出源码文件与行号；查不到的一律写「未找到」，不做推测。eventmem 侧路径相对于本仓库 `event-memory/`。

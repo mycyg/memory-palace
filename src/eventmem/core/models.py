@@ -138,12 +138,14 @@ class RevisionInput(Model):
     attributes: dict[str, Any] | None = None
 
 
-class RecallRequest(Model):
+class RecallQuery(Model):
+    """Everything a recall may be asked, except what it is for. The chat model's tools take
+    this shape, so they cannot declare a purpose: what they recall is experience."""
+
     query: str = Field(default="", max_length=4000)
     scope: Scope = Field(default_factory=Scope)
     scenario: Literal[
         "tool",
-        "companion",
         "knowledge",
         "research",
         "creative",
@@ -171,7 +173,17 @@ class RecallRequest(Model):
         return utc(value) if value else None
 
 
-class ContactPolicy(Model):
+RecallPurpose = Literal["experience_recall", "audit"]
+
+
+class RecallRequest(RecallQuery):
+    recall_purpose: RecallPurpose = Field(
+        default="experience_recall",
+        description="Experience recall excludes configuration, synthetic examples and host envelopes. Audit returns all classes with provenance labels.",
+    )
+
+
+class ReminderPolicy(Model):
     id: str = "default"
     scope: Scope = Field(default_factory=Scope)
     enabled: bool = False
@@ -183,12 +195,9 @@ class ContactPolicy(Model):
     min_interval_minutes: int = Field(default=60, ge=0)
     require_confirmation: bool = True
     idempotent_channel: bool = False
-    greeting_text: str = Field(
-        default="想聊聊今天的近况吗？", min_length=1, max_length=2000
+    triggers: list[Literal["reminder", "commitment"]] = Field(
+        default_factory=lambda: ["reminder", "commitment"]
     )
-    triggers: list[
-        Literal["reminder", "commitment", "anniversary", "checkin", "greeting"]
-    ] = Field(default_factory=lambda: ["reminder", "commitment"])
     allowed_kinds: list[Kind] = Field(
         default_factory=lambda: ["reminder", "commitment"]
     )
@@ -224,14 +233,12 @@ class ContactPolicy(Model):
         return value
 
 
-class ScheduleInput(Model):
+class ReminderInput(Model):
     command_id: str
     policy_id: str = "default"
     record_id: str
     due_at: str
-    trigger: Literal["reminder", "commitment", "anniversary", "checkin", "greeting"] = (
-        "reminder"
-    )
+    trigger: Literal["reminder", "commitment"] = "reminder"
     recurrence: Literal["none", "daily", "weekly", "yearly"] = "none"
     _time = field_validator("due_at")(utc)
 
@@ -242,11 +249,13 @@ class ModelRole(Model):
     protocol: Literal["openai", "anthropic"] = "openai"
     api_key_env: str | None = None
     timeout_seconds: float = Field(default=60, gt=0, le=600)
+    max_output_tokens: int = Field(default=8192, ge=1, le=131072)
+    reasoning_effort: str | None = None
     dimensions: int | None = Field(default=None, ge=1, le=8192)
     preprocessing: str = "text-v1"
     local_embedding: bool = False
-    input_price_per_million: float = Field(default=0, ge=0)
-    output_price_per_million: float = Field(default=0, ge=0)
+    input_price_per_million: float | None = Field(default=None, ge=0)
+    output_price_per_million: float | None = Field(default=None, ge=0)
 
 
 class Page(Model):

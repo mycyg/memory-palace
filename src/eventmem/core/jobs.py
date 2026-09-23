@@ -5,8 +5,7 @@ import threading
 import time
 import uuid
 
-from .db import Conflict, Deleted, Missing, digest
-from .envelopes import current_message
+from .db import Conflict, Deleted, Missing, digest, dumps
 from .models import RecordInput, Scope, now
 from .providers import NotConfigured, ProviderError, Providers
 
@@ -23,6 +22,26 @@ class Worker:
         if self.engine.interactive_until > time.monotonic():
             return None
         with self.engine.db.connect(write=True) as conn:
+            foreground = bool(
+                conn.execute(
+                    "SELECT 1 FROM sessions WHERE json_extract(data,'$.foreground_until')>? LIMIT 1",
+                    (time.time(),),
+                ).fetchone()
+            )
+            row = conn.execute(
+                "SELECT data FROM settings WHERE key='maintenance'"
+            ).fetchone()
+            capacity = (
+                max(1, int(json.loads(row[0]).get("concurrency", 2))) if row else 2
+            )
+            if (
+                conn.execute(
+                    "SELECT COUNT(*) FROM jobs WHERE state='running' AND lease_until>?",
+                    (time.time(),),
+                ).fetchone()[0]
+                >= capacity
+            ):
+                return None
             conn.execute(
                 "UPDATE jobs SET state='failed',error='Lease expired after maximum attempts' WHERE state='running' AND lease_until<? AND attempts>=max_attempts",
                 (time.time(),),
@@ -31,8 +50,10 @@ class Worker:
                 "UPDATE jobs SET state='failed',error='Dependency failed or canceled' WHERE state='pending' AND EXISTS(SELECT 1 FROM job_dependencies d JOIN jobs parent ON parent.id=d.dependency_id WHERE d.job_id=jobs.id AND parent.state IN ('failed','canceled'))"
             )
             row = conn.execute(
-                "SELECT * FROM jobs j WHERE ((state IN ('pending','retry') AND available<=?) OR (state='running' AND lease_until<?)) AND NOT EXISTS(SELECT 1 FROM job_dependencies d LEFT JOIN jobs parent ON parent.id=d.dependency_id WHERE d.job_id=j.id AND (parent.state IS NULL OR parent.state!='complete')) ORDER BY available,id LIMIT 1",
-                (time.time(), time.time()),
+                "SELECT * FROM jobs j WHERE ((state IN ('pending','retry') AND available<=?) OR (state='running' AND lease_until<?)) AND "
+                "(?=0 OR priority<=30) AND "
+                "NOT EXISTS(SELECT 1 FROM job_dependencies d LEFT JOIN jobs parent ON parent.id=d.dependency_id WHERE d.job_id=j.id AND (parent.state IS NULL OR parent.state!='complete')) ORDER BY priority,available,id LIMIT 1",
+                (time.time(), time.time(), int(foreground)),
             ).fetchone()
             if not row:
                 return None
@@ -74,10 +95,57 @@ class Worker:
         heartbeat = threading.Thread(target=self.renew, args=(job, done), daemon=True)
         heartbeat.start()
         try:
-            apply = self.prepare(job)
+            payload = json.loads(job["payload"])
+            model_config = self.engine.settings("models")
+            inputs = {}
+            with self.engine.db.connect() as conn:
+                if payload.get("source_id"):
+                    self.engine.source_current(conn, payload["source_id"])
+                    inputs.update(
+                        (r[0], r[1])
+                        for r in conn.execute(
+                            "SELECT r.id,r.revision FROM records r JOIN evidence e ON e.record_id=r.id WHERE e.source_id=? AND r.deleted=0",
+                            (payload["source_id"],),
+                        )
+                    )
+                if payload.get("record_id") and job["kind"] != "summary_part":
+                    record = self.engine._get(conn, payload["record_id"])
+                    inputs[record["id"]] = record["revision"]
+            # A deadline belongs to the durable attempt, not to each nested request.
+            timeout = float(
+                self.engine.settings("maintenance").get("job_timeout_seconds", 300)
+            )
+            timeout = max(0.1, min(3600, timeout))
+            finished = threading.Event()
+            outcome = {}
+
+            def prepare():
+                try:
+                    outcome["apply"] = self.prepare(job)
+                except Exception as exc:
+                    outcome["error"] = exc
+                finally:
+                    finished.set()
+
+            threading.Thread(target=prepare, daemon=True).start()
+            if not finished.wait(timeout):
+                raise TimeoutError("Job execution deadline exceeded")
+            if "error" in outcome:
+                raise outcome["error"]
+            apply = outcome["apply"]
             with self.engine.db.connect(write=True) as conn:
                 if not self.owns(conn, job):
                     return True
+                row = conn.execute(
+                    "SELECT data FROM settings WHERE key='models'"
+                ).fetchone()
+                if (json.loads(row[0]) if row else {}) != model_config:
+                    raise Conflict("Model configuration changed during execution")
+                if payload.get("source_id"):
+                    self.engine.source_current(conn, payload["source_id"])
+                for rid, revision in inputs.items():
+                    if self.engine._get(conn, rid)["revision"] != revision:
+                        raise Conflict("Job input changed during execution")
                 apply(conn)
                 conn.execute(
                     "UPDATE jobs SET state='complete',lease_until=NULL,error=NULL,updated_at=? WHERE id=?",
@@ -91,7 +159,7 @@ class Worker:
                         "waiting_config"
                         if isinstance(exc, (NotConfigured, ImportError))
                         else "canceled"
-                        if isinstance(exc, (Deleted, Missing))
+                        if isinstance(exc, (Deleted, Missing, Conflict))
                         else "failed"
                         if job["attempts"] >= job["max_attempts"]
                         else "retry"
@@ -113,6 +181,15 @@ class Worker:
                             job["id"],
                         ),
                     )
+                    if job["kind"] in {"event_summary", "summary_part"} and state in {
+                        "failed",
+                        "waiting_config",
+                    }:
+                        fid = json.loads(job["payload"]).get("family_id")
+                        conn.execute(
+                            "UPDATE families SET data=json_set(data,'$.summary.state','failed','$.summary.error',?) WHERE id=?",
+                            (error[:500], fid),
+                        )
         finally:
             done.set()
             heartbeat.join(timeout=1)
@@ -252,22 +329,12 @@ class Worker:
             source = engine.source(sid)
             if source["mechanical"] != "complete":
                 raise Conflict("Mechanical parsing has not completed")
-            channel_body = None
-            if (
-                source["namespace"].startswith("host:")
-                and source.get("metadata", {}).get("host_event") == "message"
-                and source.get("metadata", {}).get("role") == "user"
-            ):
-                raw = engine.source(sid, content=True).read_text(encoding="utf-8")
-                body = current_message(raw)
-                if body != raw:
-                    channel_body = body
             if kind == "extract_part":
-                text = (
-                    current_message(payload["text"])
-                    if channel_body is not None
-                    else payload["text"]
-                )
+                with engine.db.connect() as conn:
+                    for rid, revision in payload.get("input_revisions", {}).items():
+                        if engine._get(conn, rid)["revision"] != revision:
+                            raise Conflict("Extraction batch input changed")
+                text = payload["text"]
             else:
                 with engine.db.connect() as conn:
                     rows = conn.execute(
@@ -293,7 +360,20 @@ class Worker:
                             dependencies.append(
                                 engine.enqueue(
                                     "extract_part",
-                                    {"source_id": sid, "text": text, "part": i},
+                                    {
+                                        "source_id": sid,
+                                        "text": text,
+                                        "part": i,
+                                        "input_revisions": {
+                                            json.loads(row[0])["id"]: json.loads(
+                                                row[0]
+                                            )["revision"]
+                                            for row in conn.execute(
+                                                "SELECT r.data FROM records r JOIN evidence e ON e.record_id=r.id WHERE e.source_id=? AND r.deleted=0",
+                                                (sid,),
+                                            )
+                                        },
+                                    },
                                     f"extract-part:{sid}:{i}",
                                     conn=conn,
                                 )
@@ -311,16 +391,12 @@ class Worker:
             result = Providers(engine).json(
                 "extraction",
                 'Extract facts, preferences, relationships, commitments, procedures and episodes. Return {"candidates":[{"kind":"fact","content":"...","quote":"exact source excerpt","title":"...","attributes":{}}]}. Only include conclusions supported by an exact quote. Inferences remain unverified.',
-                {"source_id": sid, "text": text},
+                {"source_id": sid, "text": text, "scope": source["scope"]},
             )
             proposals = []
             for i, candidate in enumerate(result.get("candidates", [])[:100]):
                 quote = candidate.get("quote", "")
-                if (
-                    not quote
-                    or quote not in text
-                    or (channel_body is not None and quote not in channel_body)
-                ):
+                if not quote or quote not in text:
                     continue
                 proposals.append(
                     RecordInput(
@@ -371,7 +447,7 @@ class Worker:
             result = Providers(engine).json(
                 "conflict",
                 'Return {"relations":[{"id":"existing id","relation":"coexists|refutes|supports","reason":"..."}]}. Consider time, scope, version and independent evidence.',
-                {"candidate": data, "existing": hits["items"]},
+                {"candidate": data, "existing": hits["items"], "scope": data["scope"]},
             )
 
             def apply(conn):
@@ -429,46 +505,22 @@ class Worker:
                     )
 
             return apply
-        if kind in ("diary", "summary", "portrait", "self_narrative", "prediction"):
-            scope = Scope(**payload["scope"])
-            with engine.db.connect() as conn:
-                rows = conn.execute(
-                    "SELECT data FROM records WHERE scope=? AND deleted=0 AND status='active' AND updated_at>=? AND json_extract(data,'$.generated')=0 ORDER BY updated_at DESC LIMIT 100",
-                    (scope.key(), payload.get("since", "")),
-                ).fetchall()
-            records = [
-                json.loads(r[0]) for r in rows if not json.loads(r[0])["generated"]
-            ]
-            result = Providers(engine).json(
-                "summary" if kind != "prediction" else "prediction",
-                'Return {"content":"...","evidence_ids":[id,...]}. Write only supported observations, preserving uncertainty. Predictions must be explicitly tentative. Do not invent feelings or user commitments.',
-                {"kind": kind, "records": records},
-            )
-            evidence = list(
-                dict.fromkeys(
-                    r
-                    for r in result.get("evidence_ids", [])
-                    if r in {d["id"] for d in records}
-                )
-            )
-            if not evidence:
-                raise ValueError("Narrative has no valid evidence")
-            source_ids = sorted(
-                {sid for r in records if r["id"] in evidence for sid in r["source_ids"]}
-            )
-            record = RecordInput(
-                id="mem_" + digest(job["id"])[:32],
-                kind=kind,
-                title=payload.get("title", kind),
-                content=result["content"],
-                scope=scope,
-                source_ids=source_ids,
-                evidence_ids=evidence,
-                generated=True,
-                confirmation="inferred",
-                attributes={"generated_at": now(), "model_role": "summary"},
-            )
-            return lambda conn: engine._insert(conn, record)
+        if kind == "summary_part":
+            from .organize import prepare_summary_part
+
+            return prepare_summary_part(engine, payload)
+        if kind == "procedure_review":
+            from .organize import prepare_procedure
+
+            return prepare_procedure(engine, payload)
+        if kind == "event_summary":
+            from .organize import prepare_summary
+
+            return prepare_summary(engine, payload)
+        if kind == "event_group":
+            from .organize import prepare_events
+
+            return prepare_events(engine, Scope(**payload["scope"]))
         if kind == "prefetch":
             from .db import tokenize
             from .models import RecallRequest
@@ -546,38 +598,46 @@ class Worker:
         ):
             return
         self.last_maintenance = time.monotonic()
-        from datetime import datetime, timedelta, timezone
+        from .organize import summary_snapshot
+        from .read_policy import ReadPolicy
 
         with self.engine.db.connect(write=True) as conn:
+            if conn.execute(
+                "SELECT 1 FROM sessions WHERE json_extract(data,'$.foreground_until')>? LIMIT 1",
+                (time.time(),),
+            ).fetchone():
+                return
             scopes = conn.execute(
-                "SELECT r.scope,COUNT(*),MAX(d.revision) FROM dirty d JOIN records r ON r.id=d.record_id WHERE r.deleted=0 GROUP BY r.scope LIMIT 30"
+                "SELECT DISTINCT r.scope FROM dirty d JOIN records r ON r.id=d.record_id WHERE r.deleted=0 AND r.status='active' AND json_extract(r.data,'$.generated')=0 LIMIT 30"
             ).fetchall()
-            for scope, count, _ in scopes:
-                if count >= max(2, config.get("organize_batch", 20)):
-                    active = conn.execute(
-                        "SELECT 1 FROM jobs WHERE kind='organize' AND state IN ('pending','running','retry','waiting_config') AND json_extract(payload,'$.scope')=json(?) LIMIT 1",
-                        (scope,),
-                    ).fetchone()
-                    if not active:
-                        self.engine.enqueue(
-                            "organize",
-                            {"scope": json.loads(scope)},
-                            f"auto-organize:{digest(scope)}:{self.engine.db.generation(conn)}",
-                            conn=conn,
-                        )
-                if config.get("narratives", False):
-                    date = datetime.now(timezone.utc).date().isoformat()
-                    since = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+            for row in scopes:
+                scope = Scope(**json.loads(row[0]))
+                policy = ReadPolicy.load(self.engine, scope, conn=conn)
+                versions = [
+                    (r["id"], r["revision"])
+                    for item in conn.execute(
+                        "SELECT r.data FROM dirty d JOIN records r ON r.id=d.record_id WHERE r.scope=? AND r.deleted=0 AND r.status='active' AND r.revision=d.revision AND json_extract(r.data,'$.generated')=0 ORDER BY r.updated_at,r.id LIMIT 64",
+                        (scope.key(),),
+                    )
+                    if policy.visible(r := json.loads(item[0]))
+                ]
+                if versions:
                     self.engine.enqueue(
-                        "diary",
-                        {
-                            "scope": json.loads(scope),
-                            "since": since[:10] + "T00:00:00+00:00",
-                            "title": date,
-                        },
-                        f"auto-diary:{digest(scope)}:{date}",
+                        "event_group",
+                        {"scope": scope.model_dump()},
+                        "event-group:" + digest([scope.key(), versions]),
                         conn=conn,
                     )
+            for row in conn.execute(
+                "SELECT id FROM families WHERE state NOT IN ('archived','merged') AND json_extract(data,'$.summary.state')='dirty' LIMIT 30"
+            ).fetchall():
+                _, _, signature = summary_snapshot(self.engine, conn, row[0])
+                self.engine.enqueue(
+                    "event_summary",
+                    {"family_id": row[0], "input_revision": signature},
+                    "event-summary:" + digest([row[0], signature]),
+                    conn=conn,
+                )
 
     def replay_hosts(self):
         from .hosts import handle
@@ -590,7 +650,13 @@ class Worker:
                 data = json.loads(path.read_text())
                 # A replay cannot inject into a past host context; only receipt
                 # events are replayed. Startup/compact are fetched again live.
-                if data["event"] in {"tool", "message", "boundary", "end", "compact"}:
+                if data["event"] == "context_receipt":
+                    from .context import ContextReceipt, settle_context
+
+                    settle_context(
+                        self.engine, ContextReceipt.model_validate(data["payload"])
+                    )
+                elif data["event"] in {"tool", "message", "boundary", "end", "compact"}:
                     handle(
                         self.engine, data["event"], data["payload"], receipt_only=True
                     )
@@ -612,3 +678,59 @@ class Worker:
                 ("canceled" if action == "cancel" else "pending", time.time(), jid),
             )
         return {"id": jid, "status": "canceled" if action == "cancel" else "pending"}
+
+    def recover(self, job_ids, *, command_id, target=None):
+        """Requeue failed jobs once, keeping the failure linked to the recovery.
+
+        `control(retry)` answers an operator's click; it drops the error and leaves
+        nothing behind. A derivative recovery needs the opposite bookkeeping: the
+        failed row keeps its identity, the failure moves into `job_recovery`, and a
+        second call for the same batch finds no `failed` row left to touch. Only
+        `failed` rows move, never to `complete`; a job that failed again after an
+        earlier recovery is a new failure and takes a new command id."""
+        if (
+            not command_id
+            or not 1 <= len(job_ids) <= 50
+            or len(set(job_ids)) != len(job_ids)
+        ):
+            raise ValueError(
+                "Recovery requires a sourced command and unique bounded jobs"
+            )
+        recovered, skipped = [], []
+        with self.engine.db.connect(write=True) as conn:
+            for jid in job_ids:
+                row = conn.execute("SELECT * FROM jobs WHERE id=?", (jid,)).fetchone()
+                if not row:
+                    raise Missing(jid)
+                if row["state"] != "failed":
+                    skipped.append({"id": jid, "state": row["state"]})
+                    continue
+                payload = json.loads(row["payload"])
+                conn.execute(
+                    "INSERT OR IGNORE INTO job_recovery VALUES(?,?,?,?,?,?,?,?)",
+                    (
+                        jid,
+                        command_id,
+                        row["kind"],
+                        target or dumps(payload),
+                        row["state"],
+                        row["error"],
+                        row["attempts"],
+                        now(),
+                    ),
+                )
+                moved = conn.execute(
+                    "UPDATE jobs SET state='pending',available=?,owner=NULL,lease_until=NULL,fence=fence+1,error=NULL,attempts=0,updated_at=? WHERE id=? AND state='failed'",
+                    (time.time(), now(), jid),
+                ).rowcount
+                if moved:
+                    recovered.append(jid)
+                else:
+                    # Lost the race to another recovery; the audit row above is the
+                    # loser too, so take it back out.
+                    conn.execute(
+                        "DELETE FROM job_recovery WHERE job_id=? AND command_id=?",
+                        (jid, command_id),
+                    )
+                    skipped.append({"id": jid, "state": "changed-during-recovery"})
+        return {"recovered": recovered, "skipped": skipped, "command_id": command_id}

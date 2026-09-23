@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "MemoryPalace",
-    "version": "1.0.0"
+    "version": "2.0.0"
   },
   "paths": {
     "/v1/health": {
@@ -30,14 +30,14 @@
         "summary": "Receive Source",
         "operationId": "receive_source",
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/SourceInput"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "200": {
@@ -46,6 +46,98 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SourceResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "List Sources",
+        "operationId": "list_sources",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "personal",
+              "title": "Project"
+            }
+          },
+          {
+            "name": "persona",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "default",
+              "title": "Persona"
+            }
+          },
+          {
+            "name": "collection",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "default",
+              "title": "Collection"
+            }
+          },
+          {
+            "name": "world",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "real",
+              "title": "World"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Sources"
                 }
               }
             }
@@ -537,10 +629,7 @@
             "schema": {
               "anyOf": [
                 {
-                  "enum": [
-                    "diary",
-                    "timeline"
-                  ],
+                  "const": "timeline",
                   "type": "string"
                 },
                 {
@@ -615,6 +704,46 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RecallResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/context/receipts": {
+      "post": {
+        "summary": "Settle Context Delivery",
+        "operationId": "settle_context_delivery",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ContextReceipt"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Settle Context Delivery"
                 }
               }
             }
@@ -1358,6 +1487,47 @@
         }
       }
     },
+    "/v1/jobs/{job_id}": {
+      "get": {
+        "summary": "Read Job",
+        "operationId": "read_job",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Read Job"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/jobs/{job_id}/{action}": {
       "post": {
         "summary": "Control Job",
@@ -1757,15 +1927,15 @@
         }
       }
     },
-    "/v1/contact/policies": {
+    "/v1/reminders/policies": {
       "put": {
-        "summary": "Configure Contact",
-        "operationId": "configure_contact",
+        "summary": "Configure Reminder Policy",
+        "operationId": "configure_reminder_policy",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ContactPolicy"
+                "$ref": "#/components/schemas/ReminderPolicy"
               }
             }
           },
@@ -1779,7 +1949,7 @@
                 "schema": {
                   "additionalProperties": true,
                   "type": "object",
-                  "title": "Response Configure Contact"
+                  "title": "Response Configure Reminder Policy"
                 }
               }
             }
@@ -1797,10 +1967,10 @@
         }
       }
     },
-    "/v1/contact/{table}": {
+    "/v1/reminders/state/{table}": {
       "get": {
-        "summary": "List Contact",
-        "operationId": "list_contact",
+        "summary": "List Reminder State",
+        "operationId": "list_reminder_state",
         "parameters": [
           {
             "name": "table",
@@ -1814,6 +1984,46 @@
               ],
               "type": "string",
               "title": "Table"
+            }
+          },
+          {
+            "name": "project",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "personal",
+              "title": "Project"
+            }
+          },
+          {
+            "name": "persona",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "default",
+              "title": "Persona"
+            }
+          },
+          {
+            "name": "collection",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "default",
+              "title": "Collection"
+            }
+          },
+          {
+            "name": "world",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "real",
+              "title": "World"
             }
           },
           {
@@ -1847,7 +2057,7 @@
                 "schema": {
                   "type": "object",
                   "additionalProperties": true,
-                  "title": "Response List Contact"
+                  "title": "Response List Reminder State"
                 }
               }
             }
@@ -1865,15 +2075,15 @@
         }
       }
     },
-    "/v1/contact/schedules": {
+    "/v1/reminders": {
       "post": {
-        "summary": "Create Schedule",
-        "operationId": "create_schedule",
+        "summary": "Create Reminder",
+        "operationId": "create_reminder",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ScheduleInput"
+                "$ref": "#/components/schemas/ReminderInput"
               }
             }
           },
@@ -1887,7 +2097,7 @@
                 "schema": {
                   "additionalProperties": true,
                   "type": "object",
-                  "title": "Response Create Schedule"
+                  "title": "Response Create Reminder"
                 }
               }
             }
@@ -1905,58 +2115,7 @@
         }
       }
     },
-    "/v1/contact/schedules/{schedule_id}": {
-      "post": {
-        "summary": "Change Schedule",
-        "operationId": "change_schedule",
-        "parameters": [
-          {
-            "name": "schedule_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Schedule Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ScheduleChange"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Change Schedule"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/contact/outbox/{delivery_id}/ack": {
+    "/v1/reminders/outbox/{delivery_id}/ack": {
       "post": {
         "summary": "Acknowledge Delivery",
         "operationId": "acknowledge_delivery",
@@ -1997,10 +2156,10 @@
         }
       }
     },
-    "/v1/contact/tick": {
+    "/v1/reminders/run": {
       "post": {
-        "summary": "Contact Tick",
-        "operationId": "contact_tick",
+        "summary": "Run Reminders",
+        "operationId": "run_reminders",
         "parameters": [
           {
             "name": "deliver",
@@ -2021,7 +2180,58 @@
                 "schema": {
                   "type": "object",
                   "additionalProperties": true,
-                  "title": "Response Contact Tick"
+                  "title": "Response Run Reminders"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/reminders/{schedule_id}": {
+      "post": {
+        "summary": "Change Reminder",
+        "operationId": "change_reminder",
+        "parameters": [
+          {
+            "name": "schedule_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Schedule Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReminderChange"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Change Reminder"
                 }
               }
             }
@@ -2075,7 +2285,8 @@
                 "scenarios",
                 "connections",
                 "maintenance",
-                "parsers"
+                "parsers",
+                "ranking"
               ],
               "type": "string",
               "title": "Key"
@@ -2121,7 +2332,8 @@
                 "scenarios",
                 "connections",
                 "maintenance",
-                "parsers"
+                "parsers",
+                "ranking"
               ],
               "type": "string",
               "title": "Key"
@@ -2246,124 +2458,77 @@
         ],
         "title": "Body_upload_source"
       },
-      "ContactPolicy": {
+      "ContextDelivery": {
         "properties": {
           "id": {
             "type": "string",
-            "title": "Id",
-            "default": "default"
+            "title": "Id"
+          },
+          "body_hash": {
+            "type": "string",
+            "title": "Body Hash"
+          },
+          "epoch": {
+            "type": "integer",
+            "title": "Epoch"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "prepared",
+              "sending",
+              "unconfirmed",
+              "accepted"
+            ],
+            "title": "State"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "id",
+          "body_hash",
+          "epoch",
+          "state"
+        ],
+        "title": "ContextDelivery"
+      },
+      "ContextReceipt": {
+        "properties": {
+          "session": {
+            "type": "string",
+            "title": "Session"
           },
           "scope": {
             "$ref": "#/components/schemas/Scope"
           },
-          "enabled": {
-            "type": "boolean",
-            "title": "Enabled",
-            "default": false
+          "delivery_id": {
+            "type": "string",
+            "title": "Delivery Id"
           },
-          "channel": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
+          "body_hash": {
+            "type": "string",
+            "title": "Body Hash"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "sending",
+              "unconfirmed",
+              "accepted"
             ],
-            "title": "Channel"
-          },
-          "timezone": {
-            "type": "string",
-            "title": "Timezone",
-            "default": "UTC"
-          },
-          "quiet_start": {
-            "type": "integer",
-            "maximum": 23.0,
-            "minimum": 0.0,
-            "title": "Quiet Start",
-            "default": 22
-          },
-          "quiet_end": {
-            "type": "integer",
-            "maximum": 23.0,
-            "minimum": 0.0,
-            "title": "Quiet End",
-            "default": 8
-          },
-          "max_per_day": {
-            "type": "integer",
-            "maximum": 100.0,
-            "minimum": 0.0,
-            "title": "Max Per Day",
-            "default": 3
-          },
-          "min_interval_minutes": {
-            "type": "integer",
-            "minimum": 0.0,
-            "title": "Min Interval Minutes",
-            "default": 60
-          },
-          "require_confirmation": {
-            "type": "boolean",
-            "title": "Require Confirmation",
-            "default": true
-          },
-          "idempotent_channel": {
-            "type": "boolean",
-            "title": "Idempotent Channel",
-            "default": false
-          },
-          "greeting_text": {
-            "type": "string",
-            "maxLength": 2000,
-            "minLength": 1,
-            "title": "Greeting Text",
-            "default": "想聊聊今天的近况吗？"
-          },
-          "triggers": {
-            "items": {
-              "type": "string",
-              "enum": [
-                "reminder",
-                "commitment",
-                "anniversary",
-                "checkin",
-                "greeting"
-              ]
-            },
-            "type": "array",
-            "title": "Triggers"
-          },
-          "allowed_kinds": {
-            "items": {
-              "type": "string",
-              "enum": [
-                "episode",
-                "fact",
-                "state",
-                "preference",
-                "procedure",
-                "relationship",
-                "commitment",
-                "reminder",
-                "prediction",
-                "diary",
-                "summary",
-                "portrait",
-                "self_narrative",
-                "knowledge",
-                "checkpoint",
-                "observation"
-              ]
-            },
-            "type": "array",
-            "title": "Allowed Kinds"
+            "title": "State"
           }
         },
         "additionalProperties": false,
         "type": "object",
-        "title": "ContactPolicy"
+        "required": [
+          "session",
+          "delivery_id",
+          "body_hash",
+          "state"
+        ],
+        "title": "ContextReceipt"
       },
       "CreateRecord": {
         "properties": {
@@ -2479,10 +2644,11 @@
             "type": "string",
             "enum": [
               "family",
-              "volume"
+              "volume",
+              "event"
             ],
             "title": "Kind",
-            "default": "volume"
+            "default": "family"
           }
         },
         "additionalProperties": false,
@@ -2590,11 +2756,8 @@
             "type": "string",
             "enum": [
               "organize",
-              "diary",
-              "summary",
-              "portrait",
-              "self_narrative",
-              "prediction",
+              "event_group",
+              "event_summary",
               "rebuild",
               "build_vectors",
               "purge_vectors"
@@ -2603,6 +2766,17 @@
           },
           "scope": {
             "$ref": "#/components/schemas/Scope"
+          },
+          "family_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Family Id"
           },
           "since": {
             "type": "string",
@@ -2664,6 +2838,24 @@
             "title": "Timeout Seconds",
             "default": 60
           },
+          "max_output_tokens": {
+            "type": "integer",
+            "maximum": 131072.0,
+            "minimum": 1.0,
+            "title": "Max Output Tokens",
+            "default": 8192
+          },
+          "reasoning_effort": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoning Effort"
+          },
           "dimensions": {
             "anyOf": [
               {
@@ -2688,16 +2880,28 @@
             "default": false
           },
           "input_price_per_million": {
-            "type": "number",
-            "minimum": 0.0,
-            "title": "Input Price Per Million",
-            "default": 0
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Price Per Million"
           },
           "output_price_per_million": {
-            "type": "number",
-            "minimum": 0.0,
-            "title": "Output Price Per Million",
-            "default": 0
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Price Per Million"
           }
         },
         "additionalProperties": false,
@@ -2812,7 +3016,6 @@
             "type": "string",
             "enum": [
               "tool",
-              "companion",
               "knowledge",
               "research",
               "creative",
@@ -2970,6 +3173,16 @@
             "type": "boolean",
             "title": "Explain",
             "default": false
+          },
+          "recall_purpose": {
+            "type": "string",
+            "enum": [
+              "experience_recall",
+              "audit"
+            ],
+            "title": "Recall Purpose",
+            "description": "Experience recall excludes configuration, synthetic examples and host envelopes. Audit returns all classes with provenance labels.",
+            "default": "experience_recall"
           }
         },
         "additionalProperties": false,
@@ -3030,6 +3243,16 @@
           "instruction_authority": {
             "type": "string",
             "title": "Instruction Authority"
+          },
+          "delivery": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ContextDelivery"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": true,
@@ -3343,6 +3566,202 @@
         ],
         "title": "RelationRequest"
       },
+      "ReminderChange": {
+        "properties": {
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Revision"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "cancel",
+              "pause",
+              "resume",
+              "snooze",
+              "confirm"
+            ],
+            "title": "Action"
+          },
+          "due_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Due At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_revision",
+          "action"
+        ],
+        "title": "ReminderChange"
+      },
+      "ReminderInput": {
+        "properties": {
+          "command_id": {
+            "type": "string",
+            "title": "Command Id"
+          },
+          "policy_id": {
+            "type": "string",
+            "title": "Policy Id",
+            "default": "default"
+          },
+          "record_id": {
+            "type": "string",
+            "title": "Record Id"
+          },
+          "due_at": {
+            "type": "string",
+            "title": "Due At"
+          },
+          "trigger": {
+            "type": "string",
+            "enum": [
+              "reminder",
+              "commitment"
+            ],
+            "title": "Trigger",
+            "default": "reminder"
+          },
+          "recurrence": {
+            "type": "string",
+            "enum": [
+              "none",
+              "daily",
+              "weekly",
+              "yearly"
+            ],
+            "title": "Recurrence",
+            "default": "none"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "command_id",
+          "record_id",
+          "due_at"
+        ],
+        "title": "ReminderInput"
+      },
+      "ReminderPolicy": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id",
+            "default": "default"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/Scope"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "default": false
+          },
+          "channel": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Channel"
+          },
+          "timezone": {
+            "type": "string",
+            "title": "Timezone",
+            "default": "UTC"
+          },
+          "quiet_start": {
+            "type": "integer",
+            "maximum": 23.0,
+            "minimum": 0.0,
+            "title": "Quiet Start",
+            "default": 22
+          },
+          "quiet_end": {
+            "type": "integer",
+            "maximum": 23.0,
+            "minimum": 0.0,
+            "title": "Quiet End",
+            "default": 8
+          },
+          "max_per_day": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Max Per Day",
+            "default": 3
+          },
+          "min_interval_minutes": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Min Interval Minutes",
+            "default": 60
+          },
+          "require_confirmation": {
+            "type": "boolean",
+            "title": "Require Confirmation",
+            "default": true
+          },
+          "idempotent_channel": {
+            "type": "boolean",
+            "title": "Idempotent Channel",
+            "default": false
+          },
+          "triggers": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "reminder",
+                "commitment"
+              ]
+            },
+            "type": "array",
+            "title": "Triggers"
+          },
+          "allowed_kinds": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "episode",
+                "fact",
+                "state",
+                "preference",
+                "procedure",
+                "relationship",
+                "commitment",
+                "reminder",
+                "prediction",
+                "diary",
+                "summary",
+                "portrait",
+                "self_narrative",
+                "knowledge",
+                "checkpoint",
+                "observation"
+              ]
+            },
+            "type": "array",
+            "title": "Allowed Kinds"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ReminderPolicy"
+      },
       "RevisionInput": {
         "properties": {
           "expected_revision": {
@@ -3432,96 +3851,6 @@
         ],
         "title": "RevisionInput"
       },
-      "ScheduleChange": {
-        "properties": {
-          "expected_revision": {
-            "type": "integer",
-            "minimum": 1.0,
-            "title": "Expected Revision"
-          },
-          "action": {
-            "type": "string",
-            "enum": [
-              "cancel",
-              "pause",
-              "resume",
-              "snooze",
-              "confirm"
-            ],
-            "title": "Action"
-          },
-          "due_at": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Due At"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "expected_revision",
-          "action"
-        ],
-        "title": "ScheduleChange"
-      },
-      "ScheduleInput": {
-        "properties": {
-          "command_id": {
-            "type": "string",
-            "title": "Command Id"
-          },
-          "policy_id": {
-            "type": "string",
-            "title": "Policy Id",
-            "default": "default"
-          },
-          "record_id": {
-            "type": "string",
-            "title": "Record Id"
-          },
-          "due_at": {
-            "type": "string",
-            "title": "Due At"
-          },
-          "trigger": {
-            "type": "string",
-            "enum": [
-              "reminder",
-              "commitment",
-              "anniversary",
-              "checkin",
-              "greeting"
-            ],
-            "title": "Trigger",
-            "default": "reminder"
-          },
-          "recurrence": {
-            "type": "string",
-            "enum": [
-              "none",
-              "daily",
-              "weekly",
-              "yearly"
-            ],
-            "title": "Recurrence",
-            "default": "none"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "command_id",
-          "record_id",
-          "due_at"
-        ],
-        "title": "ScheduleInput"
-      },
       "Scope": {
         "properties": {
           "project": {
@@ -3600,7 +3929,6 @@
             "type": "string",
             "enum": [
               "tool",
-              "companion",
               "knowledge"
             ],
             "title": "Scenario",
@@ -3623,6 +3951,13 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Checkpoint"
+          },
+          "foreground_seconds": {
+            "type": "number",
+            "maximum": 3600.0,
+            "minimum": 0.0,
+            "title": "Foreground Seconds",
+            "default": 0
           }
         },
         "additionalProperties": false,

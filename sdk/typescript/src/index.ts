@@ -10,22 +10,13 @@ export type Body<K extends Operation> = K extends keyof Contract
     : unknown
   : unknown;
 
-export type Output<K extends Operation> = K extends
-  | "receive_source"
-  | "upload_source"
-  | "read_source"
-  | "create_memory"
-  | "read_memory"
-  | "revise_memory"
-  | "recall"
-  ? K extends keyof Contract
-    ? Contract[K] extends {
-        responses: { 200: { content: { "application/json": infer R } } };
-      }
-      ? R
-      : any
-    : any
-  : any;
+export type Output<K extends Operation> = K extends keyof Contract
+  ? Contract[K] extends {
+      responses: { 200: { content: { "application/json": infer R } } };
+    }
+    ? R
+    : unknown
+  : unknown;
 
 export class Client {
   constructor(

@@ -60,28 +60,28 @@ def fixture_cases():
             "expected": [0],
         },
         {
-            "scenario": "companion",
-            "query": "tea preference",
+            "scenario": "tool",
+            "query": "editor preference",
             "sources": [
-                {"text": "tea preference: jasmine", "kind": "preference"},
-                {"text": "tea preference: oolong", "kind": "preference"},
+                {"text": "editor preference: spaces", "kind": "preference"},
+                {"text": "editor preference: tabs", "kind": "preference"},
             ],
             "replace": [0, 1],
             "expected": [1],
         },
         {
-            "scenario": "companion",
-            "query": "concert promise",
-            "sources": [{"text": "concert promise for Saturday", "kind": "commitment"}],
+            "scenario": "tool",
+            "query": "review commitment",
+            "sources": [{"text": "review commitment for Saturday", "kind": "commitment"}],
             "retract": [0],
             "expected": [],
         },
         {
-            "scenario": "companion",
-            "query": "shared garden experience",
+            "scenario": "tool",
+            "query": "team review feedback",
             "sources": [
                 {
-                    "text": "shared garden experience on Sunday; the user said she enjoyed it",
+                    "text": "team review feedback on Friday; the team accepted the scope",
                     "kind": "episode",
                 }
             ],
@@ -132,11 +132,9 @@ def evaluate(output, dataset=None, answer_engine=None):
     about a remote production model's quality.
     """
     import numpy as np
-    from eventmem.recall import _bm25
-    from .retrieval import tokens
-    from .baselines import LegacyAdapter, LEGACY_REVISION
 
-    legacy = LegacyAdapter()
+    from .retrieval import bm25, tokens
+
     cases = json.loads(Path(dataset).read_text()) if dataset else fixture_cases()
     report = {
         "evaluation": "deterministic retrieval replay",
@@ -144,7 +142,6 @@ def evaluate(output, dataset=None, answer_engine=None):
         if answer_engine
         else "none; no generated answers",
         "budget": 2000,
-        "legacy_revision": LEGACY_REVISION,
         "summary_baseline": "extractive summary: first sentence of the 10 most recent scoped records",
         "vector_model": "hashed-token-256 (test baseline)",
         "scenarios": {},
@@ -161,15 +158,14 @@ def evaluate(output, dataset=None, answer_engine=None):
     }
     partial = Path(str(output) + ".partial.json")
     from .db import digest
-    from eventmem.paths import atomic_write
+    from .files import atomic_write
 
     fingerprint = digest(
         {
             "cases": cases,
             "models": answer_engine.settings("models") if answer_engine else {},
             "budget": 2000,
-            "legacy": LEGACY_REVISION,
-            "replay_schema": 1,
+            "replay_schema": 2,
         }
     )
     resume = {}
@@ -229,13 +225,13 @@ def evaluate(output, dataset=None, answer_engine=None):
             records = [engine.get(rid, known_at=cutoff) for rid in ids]
             scoped = [r for r in records if r["scope"] == Scope().model_dump()]
             words = [tokenize(r["content"]).split() for r in scoped]
-            bm25 = _bm25(words, tokenize(case["query"]).split())
+            lexical = bm25(words, tokenize(case["query"]).split())
             ranks = {
                 "none": [],
                 "recent_summary": [r["id"] for r in list(reversed(scoped))[:10]],
                 "bm25": [
                     r["id"]
-                    for score, r in sorted(zip(bm25, scoped), key=lambda p: -p[0])
+                    for score, r in sorted(zip(lexical, scoped), key=lambda p: -p[0])
                     if score > 0
                 ],
                 "vector": [
@@ -247,10 +243,7 @@ def evaluate(output, dataset=None, answer_engine=None):
                         ),
                     )
                 ],
-                "legacy_memorypalace": legacy.recall(
-                    query=case["query"], records=scoped, budget=2000, cutoff=cutoff
-                ),
-                "memorypalace_1": [
+                "memorypalace_2": [
                     r["id"]
                     for r in engine.recall(
                         RecallRequest(
@@ -363,7 +356,6 @@ def evaluate(output, dataset=None, answer_engine=None):
             }
             for name in ranks
         }
-    legacy.close()
     if answer_engine:
         report["answer_quality"] = {
             "method": "configured model judge; eight synthetic regression cases, not a general quality benchmark",
@@ -386,10 +378,11 @@ def evaluate(output, dataset=None, answer_engine=None):
 
 def benchmark(root, output, scale="smoke"):
     import numpy as np
-    import pyarrow as pa
     import psutil
-    from .vectors import VectorIndex
+    import pyarrow as pa
+
     from .retrieval import tokens
+    from .vectors import VectorIndex
 
     root, output = Path(root), Path(output)
     if root.exists() and (root / "memory.sqlite3").exists():

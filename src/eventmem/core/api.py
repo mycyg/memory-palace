@@ -14,23 +14,25 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import Field
 
+from .context import ContextReceipt, settle_context
 from .db import Conflict, Missing, dumps
 from .engine import Engine, uid
 from .jobs import Worker
-from .responses import SourceResult, RecordResult, RecallResult
 from .models import (
-    ContactPolicy,
     Model,
     ModelRole,
     RecallRequest,
     RecordInput,
+    ReminderInput,
+    ReminderPolicy,
     RevisionInput,
-    ScheduleInput,
     Scope,
     SourceInput,
 )
 from .organize import Organizer
+from .responses import RecallResult, RecordResult, SourceResult
 from .scheduler import Scheduler
+from .scheduler import phase as delivery_phase
 
 
 class CreateRecord(Model):
@@ -64,16 +66,14 @@ class FeedbackRequest(Model):
 class MaintenanceRequest(Model):
     kind: Literal[
         "organize",
-        "diary",
-        "summary",
-        "portrait",
-        "self_narrative",
-        "prediction",
+        "event_group",
+        "event_summary",
         "rebuild",
         "build_vectors",
         "purge_vectors",
     ]
     scope: Scope = Field(default_factory=Scope)
+    family_id: str | None = None
     since: str = ""
     command_id: str
     title: str = ""
@@ -83,7 +83,7 @@ class FamilyCreate(Model):
     scope: Scope = Field(default_factory=Scope)
     title: str
     members: list[str] = Field(max_length=1000)
-    kind: Literal["family", "volume"] = "volume"
+    kind: Literal["family", "volume", "event"] = "family"
 
 
 class FamilyChange(Model):
@@ -95,7 +95,7 @@ class FamilyChange(Model):
     target_revision: int | None = None
 
 
-class ScheduleChange(Model):
+class ReminderChange(Model):
     expected_revision: int = Field(ge=1)
     action: Literal["cancel", "pause", "resume", "snooze", "confirm"]
     due_at: str | None = None
@@ -105,10 +105,11 @@ class SessionBoundary(Model):
     session: str
     scope: Scope = Field(default_factory=Scope)
     event: Literal["start", "end", "compact", "checkpoint"]
-    scenario: Literal["tool", "companion", "knowledge"] = "tool"
+    scenario: Literal["tool", "knowledge"] = "tool"
     host_mode: Literal["append", "replace"] = "append"
     command_id: str
     checkpoint: dict[str, Any] = Field(default_factory=dict)
+    foreground_seconds: float = Field(default=0, ge=0, le=3600)
 
 
 class HostEvent(Model):
@@ -125,6 +126,19 @@ class WebSource(Model):
 
 
 def boundary(engine, request):
+    if request.foreground_seconds or request.event == "end":
+        import time
+
+        from .context import save_session, session_state
+
+        with engine.db.connect(write=True) as conn:
+            state = session_state(conn, request.session, request.scope)
+            state["foreground_until"] = time.time() + request.foreground_seconds
+            save_session(conn, request.session, request.scope, state)
+    if request.event == "compact":
+        from .context import complete_compaction
+
+        complete_compaction(engine, request.session, request.scope, request.command_id)
     if request.event in {"end", "checkpoint", "compact"} and request.checkpoint:
         allowed = {
             "goals",
@@ -221,7 +235,7 @@ def create_app(root=None, *, engine=None, token=None, workers=True, mcp_enabled=
 
     app = FastAPI(
         title="MemoryPalace",
-        version="1.0.0",
+        version="2.0.0",
         lifespan=lifespan,
         docs_url="/v1/docs",
         openapi_url="/v1/openapi.json",
@@ -259,7 +273,14 @@ def create_app(root=None, *, engine=None, token=None, workers=True, mcp_enabled=
 
     @app.exception_handler(Conflict)
     async def conflict(request, exc):
-        return JSONResponse({"detail": str(exc)}, status_code=409)
+        return JSONResponse(
+            {
+                "detail": str(exc),
+                **({"kind": exc.kind} if exc.kind else {}),
+                **({"code": exc.code} if exc.code else {}),
+            },
+            status_code=409,
+        )
 
     @app.exception_handler(Missing)
     async def missing(request, exc):
@@ -271,7 +292,7 @@ def create_app(root=None, *, engine=None, token=None, workers=True, mcp_enabled=
 
     @app.get("/v1/health", operation_id="health")
     def health() -> dict:
-        return {"status": "ready", "version": "1.0.0", "schema": 1}
+        return {"status": "ready", "version": app.version, "schema": 1}
 
     @app.post("/v1/sources", operation_id="receive_source", response_model=SourceResult)
     def receive_source(source: SourceInput) -> dict:
@@ -297,6 +318,37 @@ def create_app(root=None, *, engine=None, token=None, workers=True, mcp_enabled=
         if len(raw) > 256 * 1024 * 1024:
             raise HTTPException(413, "Attachment exceeds 256 MiB; split the source")
         return await asyncio.to_thread(engine.receive, source, raw)
+
+    @app.get("/v1/sources", operation_id="list_sources")
+    def list_sources(
+        project: str = "personal",
+        persona: str = "default",
+        collection: str = "default",
+        world: str = "real",
+        cursor: str = "",
+        limit: int = Query(50, ge=1, le=200),
+    ) -> dict:
+        scope = Scope(
+            project=project, persona=persona, collection=collection, world=world
+        )
+        with engine.db.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM sources WHERE scope=? AND deleted=0 AND id>? ORDER BY id LIMIT ?",
+                (scope.key(), cursor, limit + 1),
+            ).fetchall()
+        items = []
+        for row in rows[:limit]:
+            source = engine._source(row)
+            excerpt = ""
+            if source["media_type"].startswith("text/") and row["blob"]:
+                with (engine.db.blobs / row["blob"]).open("rb") as stream:
+                    excerpt = stream.read(900).decode("utf-8", errors="replace")[:300]
+            source["excerpt"] = excerpt
+            items.append(source)
+        return {
+            "items": items,
+            "cursor": rows[limit - 1]["id"] if len(rows) > limit else None,
+        }
 
     @app.get(
         "/v1/sources/{source_id}",
@@ -334,6 +386,7 @@ def create_app(root=None, *, engine=None, token=None, workers=True, mcp_enabled=
     @app.get("/v1/sources/{source_id}/page", operation_id="read_page")
     def read_page(source_id: str, page: int = Query(1, ge=1)):
         import io
+
         import pypdfium2 as pdfium
 
         source = engine.source(source_id)
@@ -367,7 +420,7 @@ def create_app(root=None, *, engine=None, token=None, workers=True, mcp_enabled=
         status: str | None = None,
         cursor: str | None = None,
         limit: int = Query(50, ge=1, le=200),
-        group: Literal["diary", "timeline"] | None = None,
+        group: Literal["timeline"] | None = None,
         query: str | None = Query(None, max_length=4000),
     ) -> dict:
         return engine.list_records(
@@ -383,6 +436,10 @@ def create_app(root=None, *, engine=None, token=None, workers=True, mcp_enabled=
     @app.post("/v1/recall", operation_id="recall", response_model=RecallResult)
     def recall(request: RecallRequest) -> dict:
         return engine.recall(request)
+
+    @app.post("/v1/context/receipts", operation_id="settle_context_delivery")
+    def settle_context_delivery(request: ContextReceipt) -> dict:
+        return settle_context(engine, request)
 
     @app.get(
         "/v1/memories/{record_id}",
@@ -471,6 +528,8 @@ def create_app(root=None, *, engine=None, token=None, workers=True, mcp_enabled=
 
     @app.post("/v1/maintenance", operation_id="run_maintenance")
     def run_maintenance(request: MaintenanceRequest) -> dict:
+        if request.kind == "event_summary" and not request.family_id:
+            raise ValueError("event_summary requires family_id")
         jid = engine.enqueue(
             request.kind,
             request.model_dump(exclude={"kind", "command_id"}),
@@ -497,6 +556,7 @@ def create_app(root=None, *, engine=None, token=None, workers=True, mcp_enabled=
     @app.post("/v1/maintenance/restore", operation_id="restore_backup")
     async def restore_backup(file: UploadFile = File()) -> dict:
         import tempfile
+
         from .transfer import restore
 
         staging = engine.db.root / "restores"
@@ -544,6 +604,14 @@ def create_app(root=None, *, engine=None, token=None, workers=True, mcp_enabled=
                 ],
                 "cursor": rows[limit - 1]["id"] if len(rows) > limit else None,
             }
+
+    @app.get("/v1/jobs/{job_id}", operation_id="read_job")
+    def read_job(job_id: str) -> dict:
+        with engine.db.connect() as conn:
+            row = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if not row:
+                raise Missing(job_id)
+            return dict(row) | {"payload": json.loads(row["payload"])}
 
     @app.post("/v1/jobs/{job_id}/{action}", operation_id="control_job")
     def control_job(job_id: str, action: Literal["cancel", "retry"]) -> dict:
@@ -618,53 +686,83 @@ def create_app(root=None, *, engine=None, token=None, workers=True, mcp_enabled=
         family_id: str | None = None,
         limit: int = Query(150, ge=1, le=300),
     ) -> dict:
+        scope = Scope(
+            project=project, persona=persona, collection=collection, world=world
+        )
         return Organizer(engine).graph(
-            Scope(project=project, persona=persona, collection=collection, world=world),
+            scope,
             family_id,
             limit,
         )
 
-    @app.put("/v1/contact/policies", operation_id="configure_contact")
-    def configure_contact(request: ContactPolicy) -> dict:
+    @app.put("/v1/reminders/policies", operation_id="configure_reminder_policy")
+    def configure_reminder_policy(request: ReminderPolicy) -> dict:
         return Scheduler(engine).policy(request)
 
-    @app.get("/v1/contact/{table}", operation_id="list_contact")
-    def list_contact(
+    @app.get("/v1/reminders/state/{table}", operation_id="list_reminder_state")
+    def list_reminder_state(
         table: Literal["policies", "schedules", "outbox"],
+        project: str = "personal",
+        persona: str = "default",
+        collection: str = "default",
+        world: str = "real",
         cursor: str = "",
         limit: int = Query(50, ge=1, le=200),
     ) -> dict:
+        def item(row):
+            value = dict(row) | {"data": json.loads(row["data"])}
+            label = delivery_phase(row) if table == "outbox" else None
+            return value | {"phase": label} if label else value
+
+        scope = Scope(
+            project=project, persona=persona, collection=collection, world=world
+        )
         with engine.db.connect() as conn:
-            rows = conn.execute(
-                f"SELECT * FROM {table} WHERE id>? ORDER BY id LIMIT ?",
-                (cursor, limit + 1),
-            ).fetchall()
+            if table == "policies":
+                rows = conn.execute(
+                    "SELECT * FROM policies WHERE id>? AND "
+                    "json_extract(data,'$.scope.project')=? AND json_extract(data,'$.scope.persona')=? "
+                    "AND json_extract(data,'$.scope.collection')=? AND json_extract(data,'$.scope.world')=? "
+                    "ORDER BY id LIMIT ?",
+                    (cursor, project, persona, collection, world, limit + 1),
+                ).fetchall()
+            elif table == "schedules":
+                rows = conn.execute(
+                    "SELECT s.* FROM schedules s JOIN records r ON r.id=s.record_id "
+                    "WHERE s.id>? AND r.scope=? AND r.deleted=0 ORDER BY s.id LIMIT ?",
+                    (cursor, scope.key(), limit + 1),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT o.* FROM outbox o JOIN schedules s ON s.id=o.schedule_id "
+                    "JOIN records r ON r.id=s.record_id WHERE o.id>? AND r.scope=? AND r.deleted=0 "
+                    "ORDER BY o.id LIMIT ?",
+                    (cursor, scope.key(), limit + 1),
+                ).fetchall()
             return {
-                "items": [
-                    dict(r) | {"data": json.loads(r["data"])} for r in rows[:limit]
-                ],
+                "items": [item(r) for r in rows[:limit]],
                 "cursor": rows[limit - 1]["id"] if len(rows) > limit else None,
             }
 
-    @app.post("/v1/contact/schedules", operation_id="create_schedule")
-    def create_schedule(request: ScheduleInput) -> dict:
+    @app.post("/v1/reminders", operation_id="create_reminder")
+    def create_reminder(request: ReminderInput) -> dict:
         return Scheduler(engine).schedule(request)
 
-    @app.post("/v1/contact/schedules/{schedule_id}", operation_id="change_schedule")
-    def change_schedule(schedule_id: str, request: ScheduleChange) -> dict:
-        return Scheduler(engine).control(
-            schedule_id, request.action, request.expected_revision, request.due_at
-        )
-
     @app.post(
-        "/v1/contact/outbox/{delivery_id}/ack", operation_id="acknowledge_delivery"
+        "/v1/reminders/outbox/{delivery_id}/ack", operation_id="acknowledge_delivery"
     )
     def acknowledge_delivery(delivery_id: str) -> dict:
         return Scheduler(engine).acknowledge(delivery_id)
 
-    @app.post("/v1/contact/tick", operation_id="contact_tick")
-    def contact_tick(deliver: bool = False) -> dict:
+    @app.post("/v1/reminders/run", operation_id="run_reminders")
+    def run_reminders(deliver: bool = False) -> dict:
         return Scheduler(engine).tick(deliver=deliver)
+
+    @app.post("/v1/reminders/{schedule_id}", operation_id="change_reminder")
+    def change_reminder(schedule_id: str, request: ReminderChange) -> dict:
+        return Scheduler(engine).control(
+            schedule_id, request.action, request.expected_revision, request.due_at
+        )
 
     @app.get("/v1/overview", operation_id="overview")
     def overview() -> dict:
@@ -673,7 +771,13 @@ def create_app(root=None, *, engine=None, token=None, workers=True, mcp_enabled=
     @app.get("/v1/settings/{key}", operation_id="read_settings")
     def read_settings(
         key: Literal[
-            "models", "budgets", "scenarios", "connections", "maintenance", "parsers"
+            "models",
+            "budgets",
+            "scenarios",
+            "connections",
+            "maintenance",
+            "parsers",
+            "ranking",
         ],
     ) -> dict:
         return engine.settings(key)
@@ -689,10 +793,10 @@ def create_app(root=None, *, engine=None, token=None, workers=True, mcp_enabled=
             "vision",
             "visual_embedding",
             "asr",
-            "prediction",
             "query",
             "answer",
             "judge",
+            "organization",
         }
         if set(request) - allowed:
             raise ValueError("Unknown model role")
@@ -702,7 +806,9 @@ def create_app(root=None, *, engine=None, token=None, workers=True, mcp_enabled=
 
     @app.put("/v1/settings/{key}", operation_id="configure_settings")
     def configure_settings(
-        key: Literal["budgets", "scenarios", "connections", "maintenance", "parsers"],
+        key: Literal[
+            "budgets", "scenarios", "connections", "maintenance", "parsers", "ranking"
+        ],
         value: dict = Body(),
     ) -> dict:
         if key == "budgets":
