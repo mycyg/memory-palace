@@ -1,7 +1,9 @@
 """Public output schemas shared by HTTP and generated SDK contracts."""
 
-from typing import Any
+from typing import Any, Literal
+
 from pydantic import BaseModel, ConfigDict
+
 from .models import Kind, State
 
 
@@ -67,6 +69,13 @@ class RecallItem(Output):
     confirmation: str
 
 
+class ContextDelivery(Output):
+    id: str
+    body_hash: str
+    epoch: int
+    state: Literal["prepared", "sending", "unconfirmed", "accepted"]
+
+
 class RecallResult(Output):
     items: list[RecallItem]
     text: str
@@ -78,3 +87,4 @@ class RecallResult(Output):
     cursor: str | None
     session_used: int
     instruction_authority: str
+    delivery: ContextDelivery | None = None

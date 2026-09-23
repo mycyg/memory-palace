@@ -1,5 +1,7 @@
 # Evidence-backed self-knowledge
 
+> **Historical 1.x application note.** The self-knowledge feature and persona-specific workflow described below are not part of the MemoryPalace 2.0 public core. See [the current architecture](architecture.md).
+
 MemoryPalace can retain an agent's role agreements, behavioral hypotheses and prospective checks as distinct records. A hypothesis remains an inference even when several reported outcomes support it. A role records an explicit agreement; it does not establish an observed trait or a conscious experience.
 
 ## Records and evidence

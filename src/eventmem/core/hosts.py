@@ -5,7 +5,6 @@ from pathlib import Path
 
 from .api import SessionBoundary, boundary
 from .db import digest, dumps
-from .envelopes import current_message
 from .models import RecallRequest, Scope, SourceInput
 
 
@@ -50,9 +49,14 @@ def handle(engine, event, payload, *, receipt_only=False):
         "tool_response", payload.get("value", payload.get("contentText", ""))
     )
     raw_text = str(payload.get("text") or payload.get("prompt") or "")
-    message = current_message(raw_text) if payload.get("role") == "user" else raw_text
+    message = raw_text
     recalled = None
-    if event == "message" and payload.get("recall_on_message") and not receipt_only:
+    if (
+        event == "message"
+        and payload.get("recall_on_message")
+        and not receipt_only
+        and not payload.get("memory_context_managed")
+    ):
         # Query before receipt so the just-submitted prompt cannot echo back as
         # historical evidence or displace relevant earlier memories.
         recalled = engine.recall(
@@ -112,7 +116,11 @@ def handle(engine, event, payload, *, receipt_only=False):
                 extract=bool(payload.get("extract", event == "message")),
             )
         )
-    if event in {"tool", "pre_action"} and not receipt_only:
+    if (
+        event in {"tool", "pre_action"}
+        and not receipt_only
+        and not payload.get("memory_context_managed")
+    ):
         if isinstance(arguments, dict):
             cue = " ".join(
                 str(arguments.get(key, ""))

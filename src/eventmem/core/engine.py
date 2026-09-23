@@ -7,7 +7,6 @@ import uuid
 from pathlib import Path
 
 from .db import Conflict, Database, Deleted, Missing, digest, dumps, tokenize
-from .envelopes import current_message
 from .models import RecordInput, RevisionInput, Scope, SourceInput, now
 
 
@@ -29,12 +28,32 @@ class Engine:
         self.interactive_until = 0.0
 
     def command(self, conn, key, payload, run):
-        hashed = digest(payload)
+        """Retry identity excludes a refreshed compare-and-swap precondition."""
+        effective = (
+            [
+                {k: v for k, v in item.items() if k != "expected_revision"}
+                if isinstance(item, dict)
+                else item
+                for item in payload
+            ]
+            if isinstance(payload, list)
+            else {k: v for k, v in payload.items() if k != "expected_revision"}
+        )
+        hashed = "v2:" + digest(effective)
         row = conn.execute("SELECT * FROM commands WHERE id=?", (key,)).fetchone()
         if row:
-            if row["digest"] != hashed:
-                raise Conflict("Idempotency key reused with different content")
-            return json.loads(row["result"])
+            if row["digest"] not in (hashed, digest(payload)):
+                # The key, not the payload: the digests stay out of the failure record.
+                raise Conflict(
+                    "Idempotency key reused with different content",
+                    kind="runtime",
+                    code="payload-changed",
+                    target=key,
+                )
+            result = json.loads(row["result"])
+            if isinstance(result, dict) and result.get("_deleted"):
+                raise Deleted("The original command result was deleted")
+            return result
         result = run()
         conn.execute("INSERT INTO commands VALUES(?,?,?)", (key, hashed, dumps(result)))
         return result
@@ -44,12 +63,6 @@ class Engine:
         sid = "src_" + digest(identity)[:32]
         raw = attachment if attachment is not None else source.text.encode()
         record_text = source.text
-        if (
-            source.namespace.startswith("host:")
-            and source.metadata.get("host_event") == "message"
-            and source.metadata.get("role") == "user"
-        ):
-            record_text = current_message(record_text)
         hash_ = digest(raw)
         # Only immutable blob IO precedes the transaction; unreferenced blobs are GC'd.
         blob = self.db.blob(raw)
@@ -91,6 +104,11 @@ class Engine:
                     else "not_requested",
                 ),
             )
+            # What a source is gets decided once, as it arrives. Its row and the root record's
+            # stamp belong to the first revision, so no stored record is rewritten to mark it.
+            from .read_policy import STAMP, stamp_source
+
+            origin = stamp_source(self, conn, sid, source, record_text)
             # Deterministic text imports can be committed with the receipt.
             if attachment is None and source.text and len(source.text) <= 1_000_000:
                 confirmation = {
@@ -109,7 +127,9 @@ class Engine:
                     valid_from=source.occurred_at,
                     confirmation=confirmation,
                     generated=source.authority == "model",
-                    attributes=source.metadata,
+                    # The stamp is the engine's word: a caller cannot supply one it did not earn.
+                    attributes={k: v for k, v in source.metadata.items() if k != STAMP}
+                    | ({STAMP: origin} if origin else {}),
                 )
                 self._insert(conn, record)
                 if source.kind in {"knowledge", "checkpoint"}:
@@ -146,12 +166,15 @@ class Engine:
         # Checkpoints replace only the same session's state. Document versions
         # follow their declared effective time, independent of delivery order.
         rows = conn.execute(
-            "SELECT r.id,s.id source_id,s.occurred_at,s.received_at FROM records r JOIN evidence e ON e.record_id=r.id JOIN sources s ON s.id=e.source_id WHERE s.namespace=? AND s.scope=? AND r.kind=? AND r.status='active' AND "
-            + ("s.session=?" if checkpoint else "s.source_key=?"),
+            "SELECT r.id,s.id source_id,s.occurred_at,s.received_at FROM records r JOIN evidence e ON e.record_id=r.id JOIN sources s ON s.id=e.source_id WHERE s.namespace=? AND s.scope=? AND json_extract(r.data,'$.generated')=0 AND r.status='active' AND "
+            + (
+                "s.session=? AND r.kind='checkpoint'"
+                if checkpoint
+                else "s.source_key=?"
+            ),
             (
                 source["namespace"],
                 source["scope"],
-                "checkpoint" if checkpoint else "knowledge",
                 source["session"] if checkpoint else source["source_key"],
             ),
         ).fetchall()
@@ -171,6 +194,19 @@ class Engine:
                     "checkpoint" if checkpoint else "document_version",
                     "Updated current source",
                 )
+
+    def source_current(self, conn, sid):
+        source = conn.execute(
+            "SELECT * FROM sources WHERE id=? AND deleted=0", (sid,)
+        ).fetchone()
+        if not source:
+            raise Missing(sid)
+        newer = conn.execute(
+            "SELECT id FROM sources WHERE namespace=? AND source_key=? AND scope=? AND deleted=0 ORDER BY occurred_at DESC,received_at DESC,id DESC LIMIT 1",
+            (source["namespace"], source["source_key"], source["scope"]),
+        ).fetchone()
+        if newer[0] != sid:
+            raise Conflict("Source version was superseded")
 
     @staticmethod
     def _source(row):
@@ -200,6 +236,21 @@ class Engine:
             if content:
                 return self.db.blobs / row["blob"]
             result = self._source(row)
+            # A provenance read says what kind of evidence this is, so a configuration is not
+            # taken for the owner's observed word. Only labelled sources gain keys.
+            from .read_policy import ReadPolicy
+
+            policy = ReadPolicy.load(
+                self, Scope.model_validate_json(row["scope"]), "audit", conn=conn
+            )
+            if policy.enabled:
+                root = conn.execute(
+                    "SELECT data FROM records WHERE id=? AND deleted=0",
+                    ("mem_" + digest([sid, "root"])[:32],),
+                ).fetchone()
+                policy.present_source(
+                    result, json.loads(root[0])["content"] if root else None
+                )
             rows = [
                 r[0]
                 for r in conn.execute(
@@ -214,7 +265,7 @@ class Engine:
     def _insert(self, conn, record: RecordInput):
         rid = record.id or uid("mem")
         if conn.execute("SELECT 1 FROM tombstones WHERE key=?", (rid,)).fetchone():
-            raise Deleted(rid)
+            raise Deleted(rid, code="tombstoned")
         existing = conn.execute(
             "SELECT data FROM records WHERE id=?", (rid,)
         ).fetchone()
@@ -225,8 +276,14 @@ class Engine:
                 or stored["scope"] != record.scope.model_dump()
                 or stored["kind"] != record.kind
             ):
-                raise Conflict("Record id already belongs to different content")
+                raise Conflict(
+                    "Record id already belongs to different content", target=rid
+                )
             return stored
+        if record.kind in {"diary", "portrait", "self_narrative", "prediction"}:
+            raise ValueError(
+                "This historical record kind is read-only in MemoryPalace 2.0"
+            )
         for sid in set(record.source_ids):
             row = conn.execute(
                 "SELECT scope FROM sources WHERE id=? AND deleted=0", (sid,)
@@ -299,6 +356,9 @@ class Engine:
             return self.command(conn, f"record:{command_id}", record.model_dump(), run)
 
     def _dirty(self, conn, data):
+        from .organize import invalidate_membership
+
+        invalidate_membership(conn, data["id"])
         conn.execute(
             "INSERT INTO dirty VALUES(?,?) ON CONFLICT(record_id) DO UPDATE SET revision=excluded.revision",
             (data["id"], data["revision"]),
@@ -360,14 +420,25 @@ class Engine:
 
     def history(self, rid, cursor=2147483647, limit=50):
         with self.db.connect() as conn:
-            self._get(conn, rid)
-            return [
+            current = self._get(conn, rid)
+            rows = [
                 dict(r) | {"data": json.loads(r["data"])}
                 for r in conn.execute(
                     "SELECT * FROM revisions WHERE record_id=? AND revision<? ORDER BY revision DESC LIMIT ?",
                     (rid, cursor, limit),
                 )
             ]
+            # Reading the versions of a record is an audit read: every revision is there, and
+            # what is not experience says so instead of showing the stored confirmation.
+            from .read_policy import ReadPolicy
+
+            policy = ReadPolicy.load(
+                self, Scope(**current["scope"]), "audit", conn=conn
+            )
+            if policy.enabled:
+                for row in rows:
+                    policy.present(row["data"], row["data"])
+        return rows
 
     def _save_revision(self, conn, data, action, reason):
         data["revision"] += 1
@@ -404,6 +475,15 @@ class Engine:
         )
         self._index_text(conn, data)
         self._dirty(conn, data)
+        # All revision paths use the same invalidation, including source supersession.
+        for row in conn.execute(
+            "SELECT record_id FROM dependencies WHERE evidence_id=?", (data["id"],)
+        ).fetchall():
+            child = self._get(conn, row[0])
+            if child["generated"] and child["status"] == "active":
+                child["status"] = "unverified"
+                child["attributes"]["stale_evidence"] = data["id"]
+                self._save_revision(conn, child, "evidence_changed", reason)
 
     def revise(self, rid, change: RevisionInput):
         with self.db.connect(write=True) as conn:
@@ -411,8 +491,15 @@ class Engine:
             def run():
                 data = self._get(conn, rid)
                 if data["revision"] != change.expected_revision:
+                    # A formatted message is never a static literal, so this one
+                    # carries its classification and its versions as keywords.
                     raise Conflict(
-                        f"Revision changed; current revision is {data['revision']}"
+                        f"Revision changed; current revision is {data['revision']}",
+                        kind="runtime",
+                        code="record-revision-changed",
+                        target=rid,
+                        expected=change.expected_revision,
+                        actual=data["revision"],
                     )
                 statuses = {
                     "confirm": "active",
@@ -475,38 +562,28 @@ class Engine:
                         {"reason": change.reason},
                     )
                 self._save_revision(conn, data, change.action, change.reason)
-                # Invalidate generated conclusions, never silently promote a stale summary.
-                pending = [rid]
-                visited = {rid}
-                while pending:
-                    parent = pending.pop()
-                    for dep in conn.execute(
-                        "SELECT record_id FROM dependencies WHERE evidence_id=?",
-                        (parent,),
-                    ).fetchall():
-                        if dep[0] in visited:
-                            continue
-                        visited.add(dep[0])
-                        pending.append(dep[0])
-                        child = self._get(conn, dep[0])
-                        if child["generated"] and child["status"] == "active":
-                            child["status"] = "unverified"
-                            child["attributes"]["stale_evidence"] = rid
-                            self._save_revision(
-                                conn, child, "evidence_changed", change.reason
-                            )
                 if data["status"] != "active" or data["attributes"].get("completed"):
-                    conn.execute(
-                        "UPDATE outbox SET state='canceled' WHERE schedule_id IN (SELECT id FROM schedules WHERE record_id=?) AND state IN ('suggested','ready','retry','sending')",
+                    # The scheduler's one cancel rule: a delivery whose request may be
+                    # on the network is never called canceled.
+                    from .scheduler import withdraw
+
+                    withdraw(
+                        conn,
+                        "schedule_id IN (SELECT id FROM schedules WHERE record_id=?)",
                         (rid,),
                     )
                     conn.execute(
-                        "UPDATE schedules SET state='canceled',revision=revision+1 WHERE record_id=?",
+                        "UPDATE schedules SET state='canceled',revision=revision+1,data=json_set(data,'$.generation',COALESCE(json_extract(data,'$.generation'),0)+1) WHERE record_id=?",
                         (rid,),
                     )
                 else:
+                    # A dispatched delivery keeps its frozen body, so a retry repeats
+                    # the same bytes. One still waiting takes the new text, and a claim
+                    # on it is released so that it is frozen again from this revision.
                     conn.execute(
-                        "UPDATE outbox SET data=json_set(data,'$.text',?,'$.record_revision',?) WHERE schedule_id IN (SELECT id FROM schedules WHERE record_id=?) AND state IN ('suggested','ready','retry')",
+                        "UPDATE outbox SET lease_until=CASE WHEN lease_until=json_extract(data,'$.claim.lease_until') THEN NULL ELSE lease_until END,"
+                        "data=json_remove(json_set(data,'$.text',?,'$.record_revision',?),'$.claim') "
+                        "WHERE schedule_id IN (SELECT id FROM schedules WHERE record_id=?) AND state IN ('suggested','ready','retry') AND json_extract(data,'$.dispatch.body') IS NULL",
                         (data["content"], data["revision"], rid),
                     )
                 self.db.bump(conn)
@@ -550,6 +627,23 @@ class Engine:
             raise ValueError("Unknown relationship")
         with self.db.connect(write=True) as conn:
             result = self._relation(conn, subject, predicate, object_, attributes or {})
+            if predicate in {"counterexample", "refutes", "verifies"}:
+                for rid in {subject, object_}:
+                    record = self._get(conn, rid)
+                    if record["kind"] == "procedure":
+                        record["attributes"]["review_required"] = True
+                        self._save_revision(
+                            conn,
+                            record,
+                            "procedure_evidence",
+                            "New result or counterexample",
+                        )
+                        self.enqueue(
+                            "procedure_review",
+                            {"record_id": rid, "revision": record["revision"]},
+                            f"procedure-review:{rid}:{record['revision']}",
+                            conn=conn,
+                        )
             self.db.bump(conn)
             return result
 
@@ -576,7 +670,7 @@ class Engine:
             clauses.append("kind=?")
             values.append(kind)
         groups = {
-            "diary": ["diary", "summary", "portrait", "self_narrative", "prediction"],
+            "summaries": ["summary"],
             "timeline": [
                 "episode",
                 "checkpoint",
@@ -603,9 +697,15 @@ class Engine:
                 + " ORDER BY id LIMIT ?",
                 values + [limit + 1],
             ).fetchall()
+            from .read_policy import ReadPolicy
+
+            # A listing is an audit read: everything is there, and what is not experience says
+            # so. Classified before the attributes are blanked, because the rules read them.
+            policy = ReadPolicy.load(self, scope, "audit", conn=conn)
         items = []
         for row in rows[:limit]:
             data = json.loads(row["data"])
+            policy.present(data, data)
             data.update(content_length=len(data["content"]), preview=True)
             data["content"] = data["content"][:2000]
             data["attributes"] = {}
@@ -679,6 +779,7 @@ class Engine:
                 # Derived narratives cite multiple sources. Only original sources
                 # of the selected object are erased; unrelated cited sources stay.
             blobs_to_remove = set()
+            removed_families = set()
             for sid in source_ids:
                 row = conn.execute(
                     "SELECT blob FROM sources WHERE id=?", (sid,)
@@ -700,6 +801,7 @@ class Engine:
                         "SELECT family_id FROM members WHERE record_id=?", (current,)
                     )
                 ]
+                removed_families.update(family_ids)
                 for family_id in family_ids:
                     conn.execute(
                         "DELETE FROM family_revisions WHERE id=?", (family_id,)
@@ -736,19 +838,49 @@ class Engine:
                         "INSERT OR IGNORE INTO tombstones VALUES(?,?)", (sid, now())
                     )
                     conn.execute("DELETE FROM sources WHERE id=?", (sid,))
-            # Stored command responses and session sets may contain deleted text.
-            conn.execute("DELETE FROM commands")
-            conn.execute("DELETE FROM sessions")
-            conn.execute("DELETE FROM prefetch")
-            conn.execute("DELETE FROM metrics")
-            for job in conn.execute("SELECT id,payload FROM jobs").fetchall():
-                payload = json.loads(job["payload"])
-                if (
-                    payload.get("record_id") in deleted
-                    or payload.get("source_id") in source_ids
-                ):
                     conn.execute(
-                        "UPDATE jobs SET state='canceled',payload='{}',error=NULL WHERE id=?",
+                        "DELETE FROM source_evidence_class WHERE source_id=?", (sid,)
+                    )
+            removed_ids = deleted | source_ids | removed_families
+
+            def references_deleted(value):
+                if isinstance(value, dict):
+                    return any(references_deleted(item) for item in value.values())
+                if isinstance(value, list):
+                    return any(references_deleted(item) for item in value)
+                return isinstance(value, str) and value in removed_ids
+
+            # Keep command identity and delivery receipts while removing erased text.
+            for command in conn.execute("SELECT id,result FROM commands").fetchall():
+                if references_deleted(json.loads(command["result"])):
+                    conn.execute(
+                        "UPDATE commands SET result=? WHERE id=?",
+                        ('{"_deleted":true}', command["id"]),
+                    )
+            for row in conn.execute("SELECT id,data FROM sessions").fetchall():
+                state = json.loads(row["data"])
+                for key in ("seen", "resident"):
+                    state[key] = {
+                        rid: revision
+                        for rid, revision in state.get(key, {}).items()
+                        if rid not in deleted
+                    }
+                for delivery in state.get("deliveries", {}).values():
+                    delivery["records"] = {
+                        rid: revision
+                        for rid, revision in delivery["records"].items()
+                        if rid not in deleted
+                    }
+                if references_deleted(state.get("checkpoint")):
+                    state["checkpoint"] = None
+                conn.execute(
+                    "UPDATE sessions SET data=? WHERE id=?", (dumps(state), row["id"])
+                )
+            conn.execute("DELETE FROM prefetch")
+            for job in conn.execute("SELECT id,payload FROM jobs").fetchall():
+                if references_deleted(json.loads(job["payload"])):
+                    conn.execute(
+                        "UPDATE jobs SET state='canceled',payload='{}',error=NULL,owner=NULL,lease_until=NULL,fence=fence+1 WHERE id=?",
                         (job["id"],),
                     )
             self.enqueue("purge_vectors", {}, f"purge:{uuid.uuid4().hex}", conn=conn)
@@ -793,10 +925,17 @@ class Engine:
                 if path.name not in used and path.stat().st_mtime < time.time() - 60:
                     path.unlink(missing_ok=True)
 
-    def enqueue(self, kind, payload, key, dependencies=(), *, conn=None):
+    def enqueue(self, kind, payload, key, dependencies=(), *, conn=None, priority=100):
         if conn is None:
             with self.db.connect(write=True) as transaction:
-                return self.enqueue(kind, payload, key, dependencies, conn=transaction)
+                return self.enqueue(
+                    kind,
+                    payload,
+                    key,
+                    dependencies,
+                    conn=transaction,
+                    priority=priority,
+                )
         jid = "job_" + digest(key)[:32]
         existing = conn.execute(
             "SELECT kind,payload FROM jobs WHERE id=?", (jid,)
@@ -807,8 +946,8 @@ class Engine:
             raise Conflict("Job key reused with a different task")
         stamp = now()
         conn.execute(
-            "INSERT OR IGNORE INTO jobs(id,kind,unique_key,payload,state,available,created_at,updated_at) VALUES(?,?,?,?,'pending',?,?,?)",
-            (jid, kind, key, dumps(payload), time.time(), stamp, stamp),
+            "INSERT OR IGNORE INTO jobs(id,kind,unique_key,payload,state,available,created_at,updated_at,priority) VALUES(?,?,?,?,'pending',?,?,?,?)",
+            (jid, kind, key, dumps(payload), time.time(), stamp, stamp, priority),
         )
         for dependency in dependencies:
             conn.execute(
@@ -824,6 +963,10 @@ class Engine:
                     (key, dumps(value)),
                 )
                 self.db.bump(conn)
+                if key == "models":
+                    conn.execute(
+                        "UPDATE families SET data=json_set(data,'$.summary.state','dirty') WHERE state NOT IN ('archived','merged')"
+                    )
                 # Explicit configuration changes make pending model jobs retryable.
                 conn.execute(
                     "UPDATE jobs SET state='pending',available=? WHERE state='waiting_config'",
@@ -847,11 +990,18 @@ class Engine:
             raise ValueError("Unsupported feedback type")
         with self.db.connect(write=True) as conn:
             self._get(conn, rid)
-            fid = key or uid("feedback")
+            actual = type_ in {"read", "adopted", "verified"}
+            identity = key or (attributes or {}).get("input_id") or session
+            fid = (
+                "feedback_" + digest([rid, identity])[:32]
+                if actual and identity
+                else key or uid("feedback")
+            )
             conn.execute(
                 "INSERT OR IGNORE INTO feedback VALUES(?,?,?,?,?,?)",
                 (fid, rid, session, type_, now(), dumps(attributes or {})),
             )
+            self.db.bump(conn)
         return {"id": fid, "type": type_}
 
     def recall(self, request):
@@ -890,9 +1040,20 @@ class Engine:
                 json.loads(r[0])
                 for r in conn.execute("SELECT data FROM vector_indexes")
             ]
-            metrics = conn.execute(
-                "SELECT name,value,data FROM metrics ORDER BY id DESC LIMIT 2000"
-            ).fetchall()
+            metrics = [
+                row
+                for name in (
+                    "recall_ms",
+                    "model_cost",
+                    "model_tokens",
+                    "model_usage_unknown",
+                    "model_cost_unknown",
+                )
+                for row in conn.execute(
+                    "SELECT name,value,data FROM metrics WHERE name=? ORDER BY id DESC LIMIT 2000",
+                    (name,),
+                )
+            ]
         times = sorted(r["value"] for r in metrics if r["name"] == "recall_ms")
         counts["latency"] = {
             "samples": len(times),
@@ -905,5 +1066,15 @@ class Engine:
         )
         counts["model_tokens"] = sum(
             r["value"] for r in metrics if r["name"] == "model_tokens"
+        )
+        counts["usage_unknown_calls"] = sum(
+            r["value"] for r in metrics if r["name"] == "model_usage_unknown"
+        )
+        counts["unpriced_calls"] = sum(
+            r["value"] for r in metrics if r["name"] == "model_cost_unknown"
+        )
+        counts["model_usage_complete"] = counts["usage_unknown_calls"] == 0
+        counts["model_cost_complete"] = (
+            counts["model_usage_complete"] and counts["unpriced_calls"] == 0
         )
         return counts

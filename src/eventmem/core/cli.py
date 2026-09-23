@@ -24,7 +24,6 @@ COMMANDS = {
     "restore",
     "export",
     "api",
-    "contact",
     "evaluate",
     "benchmark",
     "host",
@@ -34,7 +33,7 @@ COMMANDS = {
 
 def parser():
     root = argparse.ArgumentParser(
-        prog="eventmem", description="MemoryPalace 1.0 unified service and tools"
+        prog="eventmem", description="MemoryPalace 2.0 unified service and tools"
     )
     sub = root.add_subparsers(dest="command", required=True)
     for command in sorted(COMMANDS):
@@ -42,6 +41,7 @@ def parser():
         p.add_argument(
             "--root",
             type=Path,
+            required=command == "migrate",
             default=Path(
                 os.environ.get("EVENTMEM_HOME", str(Path.home() / ".memorypalace"))
             ),
@@ -58,12 +58,12 @@ def parser():
                 "--scope", help="JSON scope; default isolates each project cwd"
             )
             p.add_argument(
-                "--scenario", choices=["tool", "companion", "knowledge"], default="tool"
+                "--scenario", choices=["tool", "knowledge"], default="tool"
             )
         elif command in {"serve", "console"}:
             p.add_argument("--port", type=int, default=8319)
             p.add_argument("--no-worker", action="store_true")
-        elif command in {"receive", "recall", "correct", "contact", "host"}:
+        elif command in {"receive", "recall", "correct", "host"}:
             p.add_argument("--json", help="JSON payload; omit to read stdin")
             if command == "correct":
                 p.add_argument("id")
@@ -186,7 +186,7 @@ def main(argv=None):
             else:
                 worker.run()
                 return 0
-        elif command in {"receive", "recall", "correct", "contact", "host"}:
+        elif command in {"receive", "recall", "correct", "host"}:
             data = json.loads(args.json or sys.stdin.read())
             if command == "receive":
                 result = engine.receive(SourceInput.model_validate(data))
@@ -198,11 +198,6 @@ def main(argv=None):
                 from .hosts import handle
 
                 result = handle(engine, args.event, data)
-            else:
-                from .models import ScheduleInput
-                from .scheduler import Scheduler
-
-                result = Scheduler(engine).schedule(ScheduleInput.model_validate(data))
         elif command == "memory":
             from .reading import read_segment
 

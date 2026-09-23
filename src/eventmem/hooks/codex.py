@@ -11,8 +11,8 @@ from pathlib import Path
 import httpx
 
 from eventmem.core.db import digest, dumps
+from eventmem.core.files import atomic_write
 from eventmem.core.models import Scope
-from eventmem.paths import atomic_write
 
 EVENTS = {
     "SessionStart": "start",
@@ -141,7 +141,7 @@ def main(argv=None):
     parser.add_argument("--scope", default=os.environ.get("EVENTMEM_SCOPE"))
     parser.add_argument(
         "--scenario",
-        choices=["tool", "companion", "knowledge"],
+        choices=["tool", "knowledge"],
         default=os.environ.get("EVENTMEM_SCENARIO", "tool"),
     )
     args = parser.parse_args(argv)

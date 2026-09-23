@@ -28,7 +28,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** List Sources */
+        get: operations["list_sources"];
         put?: never;
         /** Receive Source */
         post: operations["receive_source"];
@@ -186,6 +187,23 @@ export interface paths {
         put?: never;
         /** Recall */
         post: operations["recall"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/context/receipts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Settle Context Delivery */
+        post: operations["settle_context_delivery"];
         delete?: never;
         options?: never;
         head?: never;
@@ -431,6 +449,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/jobs/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Job */
+        get: operations["read_job"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/jobs/{job_id}/{action}": {
         parameters: {
             query?: never;
@@ -501,7 +536,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/contact/policies": {
+    "/v1/reminders/policies": {
         parameters: {
             query?: never;
             header?: never;
@@ -509,8 +544,8 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Configure Contact */
-        put: operations["configure_contact"];
+        /** Configure Reminder Policy */
+        put: operations["configure_reminder_policy"];
         post?: never;
         delete?: never;
         options?: never;
@@ -518,15 +553,15 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/contact/{table}": {
+    "/v1/reminders/state/{table}": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** List Contact */
-        get: operations["list_contact"];
+        /** List Reminder State */
+        get: operations["list_reminder_state"];
         put?: never;
         post?: never;
         delete?: never;
@@ -535,7 +570,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/contact/schedules": {
+    "/v1/reminders": {
         parameters: {
             query?: never;
             header?: never;
@@ -544,32 +579,15 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Create Schedule */
-        post: operations["create_schedule"];
+        /** Create Reminder */
+        post: operations["create_reminder"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/v1/contact/schedules/{schedule_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Change Schedule */
-        post: operations["change_schedule"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/contact/outbox/{delivery_id}/ack": {
+    "/v1/reminders/outbox/{delivery_id}/ack": {
         parameters: {
             query?: never;
             header?: never;
@@ -586,7 +604,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/contact/tick": {
+    "/v1/reminders/run": {
         parameters: {
             query?: never;
             header?: never;
@@ -595,8 +613,25 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Contact Tick */
-        post: operations["contact_tick"];
+        /** Run Reminders */
+        post: operations["run_reminders"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/reminders/{schedule_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Change Reminder */
+        post: operations["change_reminder"];
         delete?: never;
         options?: never;
         head?: never;
@@ -671,65 +706,36 @@ export interface components {
             /** File */
             file: string;
         };
-        /** ContactPolicy */
-        ContactPolicy: {
+        /** ContextDelivery */
+        ContextDelivery: {
+            /** Id */
+            id: string;
+            /** Body Hash */
+            body_hash: string;
+            /** Epoch */
+            epoch: number;
             /**
-             * Id
-             * @default default
+             * State
+             * @enum {string}
              */
-            id?: string;
+            state: "prepared" | "sending" | "unconfirmed" | "accepted";
+        } & {
+            [key: string]: unknown;
+        };
+        /** ContextReceipt */
+        ContextReceipt: {
+            /** Session */
+            session: string;
             scope?: components["schemas"]["Scope"];
+            /** Delivery Id */
+            delivery_id: string;
+            /** Body Hash */
+            body_hash: string;
             /**
-             * Enabled
-             * @default false
+             * State
+             * @enum {string}
              */
-            enabled?: boolean;
-            /** Channel */
-            channel?: string | null;
-            /**
-             * Timezone
-             * @default UTC
-             */
-            timezone?: string;
-            /**
-             * Quiet Start
-             * @default 22
-             */
-            quiet_start?: number;
-            /**
-             * Quiet End
-             * @default 8
-             */
-            quiet_end?: number;
-            /**
-             * Max Per Day
-             * @default 3
-             */
-            max_per_day?: number;
-            /**
-             * Min Interval Minutes
-             * @default 60
-             */
-            min_interval_minutes?: number;
-            /**
-             * Require Confirmation
-             * @default true
-             */
-            require_confirmation?: boolean;
-            /**
-             * Idempotent Channel
-             * @default false
-             */
-            idempotent_channel?: boolean;
-            /**
-             * Greeting Text
-             * @default 想聊聊今天的近况吗？
-             */
-            greeting_text?: string;
-            /** Triggers */
-            triggers?: ("reminder" | "commitment" | "anniversary" | "checkin" | "greeting")[];
-            /** Allowed Kinds */
-            allowed_kinds?: ("episode" | "fact" | "state" | "preference" | "procedure" | "relationship" | "commitment" | "reminder" | "prediction" | "diary" | "summary" | "portrait" | "self_narrative" | "knowledge" | "checkpoint" | "observation")[];
+            state: "sending" | "unconfirmed" | "accepted";
         };
         /** CreateRecord */
         CreateRecord: {
@@ -764,10 +770,10 @@ export interface components {
             members: string[];
             /**
              * Kind
-             * @default volume
+             * @default family
              * @enum {string}
              */
-            kind?: "family" | "volume";
+            kind?: "family" | "volume" | "event";
         };
         /** FeedbackRequest */
         FeedbackRequest: {
@@ -813,8 +819,10 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "organize" | "diary" | "summary" | "portrait" | "self_narrative" | "prediction" | "rebuild" | "build_vectors" | "purge_vectors";
+            kind: "organize" | "event_group" | "event_summary" | "rebuild" | "build_vectors" | "purge_vectors";
             scope?: components["schemas"]["Scope"];
+            /** Family Id */
+            family_id?: string | null;
             /**
              * Since
              * @default
@@ -847,6 +855,13 @@ export interface components {
              * @default 60
              */
             timeout_seconds?: number;
+            /**
+             * Max Output Tokens
+             * @default 8192
+             */
+            max_output_tokens?: number;
+            /** Reasoning Effort */
+            reasoning_effort?: string | null;
             /** Dimensions */
             dimensions?: number | null;
             /**
@@ -859,16 +874,10 @@ export interface components {
              * @default false
              */
             local_embedding?: boolean;
-            /**
-             * Input Price Per Million
-             * @default 0
-             */
-            input_price_per_million?: number;
-            /**
-             * Output Price Per Million
-             * @default 0
-             */
-            output_price_per_million?: number;
+            /** Input Price Per Million */
+            input_price_per_million?: number | null;
+            /** Output Price Per Million */
+            output_price_per_million?: number | null;
         };
         /** RecallItem */
         RecallItem: {
@@ -916,7 +925,7 @@ export interface components {
              * @default tool
              * @enum {string}
              */
-            scenario?: "tool" | "companion" | "knowledge" | "research" | "creative" | "support" | "operations";
+            scenario?: "tool" | "knowledge" | "research" | "creative" | "support" | "operations";
             /**
              * Mode
              * @default fast
@@ -969,6 +978,13 @@ export interface components {
              * @default false
              */
             explain?: boolean;
+            /**
+             * Recall Purpose
+             * @description Experience recall excludes configuration, synthetic examples and host envelopes. Audit returns all classes with provenance labels.
+             * @default experience_recall
+             * @enum {string}
+             */
+            recall_purpose?: "experience_recall" | "audit";
         };
         /** RecallResult */
         RecallResult: {
@@ -994,6 +1010,7 @@ export interface components {
             session_used: number;
             /** Instruction Authority */
             instruction_authority: string;
+            delivery?: components["schemas"]["ContextDelivery"] | null;
         } & {
             [key: string]: unknown;
         };
@@ -1110,6 +1127,99 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** ReminderChange */
+        ReminderChange: {
+            /** Expected Revision */
+            expected_revision: number;
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "cancel" | "pause" | "resume" | "snooze" | "confirm";
+            /** Due At */
+            due_at?: string | null;
+        };
+        /** ReminderInput */
+        ReminderInput: {
+            /** Command Id */
+            command_id: string;
+            /**
+             * Policy Id
+             * @default default
+             */
+            policy_id?: string;
+            /** Record Id */
+            record_id: string;
+            /** Due At */
+            due_at: string;
+            /**
+             * Trigger
+             * @default reminder
+             * @enum {string}
+             */
+            trigger?: "reminder" | "commitment";
+            /**
+             * Recurrence
+             * @default none
+             * @enum {string}
+             */
+            recurrence?: "none" | "daily" | "weekly" | "yearly";
+        };
+        /** ReminderPolicy */
+        ReminderPolicy: {
+            /**
+             * Id
+             * @default default
+             */
+            id?: string;
+            scope?: components["schemas"]["Scope"];
+            /**
+             * Enabled
+             * @default false
+             */
+            enabled?: boolean;
+            /** Channel */
+            channel?: string | null;
+            /**
+             * Timezone
+             * @default UTC
+             */
+            timezone?: string;
+            /**
+             * Quiet Start
+             * @default 22
+             */
+            quiet_start?: number;
+            /**
+             * Quiet End
+             * @default 8
+             */
+            quiet_end?: number;
+            /**
+             * Max Per Day
+             * @default 3
+             */
+            max_per_day?: number;
+            /**
+             * Min Interval Minutes
+             * @default 60
+             */
+            min_interval_minutes?: number;
+            /**
+             * Require Confirmation
+             * @default true
+             */
+            require_confirmation?: boolean;
+            /**
+             * Idempotent Channel
+             * @default false
+             */
+            idempotent_channel?: boolean;
+            /** Triggers */
+            triggers?: ("reminder" | "commitment")[];
+            /** Allowed Kinds */
+            allowed_kinds?: ("episode" | "fact" | "state" | "preference" | "procedure" | "relationship" | "commitment" | "reminder" | "prediction" | "diary" | "summary" | "portrait" | "self_narrative" | "knowledge" | "checkpoint" | "observation")[];
+        };
         /** RevisionInput */
         RevisionInput: {
             /** Expected Revision */
@@ -1136,44 +1246,6 @@ export interface components {
             attributes?: {
                 [key: string]: unknown;
             } | null;
-        };
-        /** ScheduleChange */
-        ScheduleChange: {
-            /** Expected Revision */
-            expected_revision: number;
-            /**
-             * Action
-             * @enum {string}
-             */
-            action: "cancel" | "pause" | "resume" | "snooze" | "confirm";
-            /** Due At */
-            due_at?: string | null;
-        };
-        /** ScheduleInput */
-        ScheduleInput: {
-            /** Command Id */
-            command_id: string;
-            /**
-             * Policy Id
-             * @default default
-             */
-            policy_id?: string;
-            /** Record Id */
-            record_id: string;
-            /** Due At */
-            due_at: string;
-            /**
-             * Trigger
-             * @default reminder
-             * @enum {string}
-             */
-            trigger?: "reminder" | "commitment" | "anniversary" | "checkin" | "greeting";
-            /**
-             * Recurrence
-             * @default none
-             * @enum {string}
-             */
-            recurrence?: "none" | "daily" | "weekly" | "yearly";
         };
         /** Scope */
         Scope: {
@@ -1224,7 +1296,7 @@ export interface components {
              * @default tool
              * @enum {string}
              */
-            scenario?: "tool" | "companion" | "knowledge";
+            scenario?: "tool" | "knowledge";
             /**
              * Host Mode
              * @default append
@@ -1237,6 +1309,11 @@ export interface components {
             checkpoint?: {
                 [key: string]: unknown;
             };
+            /**
+             * Foreground Seconds
+             * @default 0
+             */
+            foreground_seconds?: number;
         };
         /** SourceInput */
         SourceInput: {
@@ -1388,6 +1465,44 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+        };
+    };
+    list_sources: {
+        parameters: {
+            query?: {
+                project?: string;
+                persona?: string;
+                collection?: string;
+                world?: string;
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -1671,7 +1786,7 @@ export interface operations {
                 status?: string | null;
                 cursor?: string | null;
                 limit?: number;
-                group?: ("diary" | "timeline") | null;
+                group?: "timeline" | null;
                 query?: string | null;
             };
             header?: never;
@@ -1755,6 +1870,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RecallResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    settle_context_delivery: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContextReceipt"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -2274,6 +2424,39 @@ export interface operations {
             };
         };
     };
+    read_job: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     control_job: {
         parameters: {
             query?: never;
@@ -2492,7 +2675,7 @@ export interface operations {
             };
         };
     };
-    configure_contact: {
+    configure_reminder_policy: {
         parameters: {
             query?: never;
             header?: never;
@@ -2501,7 +2684,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ContactPolicy"];
+                "application/json": components["schemas"]["ReminderPolicy"];
             };
         };
         responses: {
@@ -2527,9 +2710,13 @@ export interface operations {
             };
         };
     };
-    list_contact: {
+    list_reminder_state: {
         parameters: {
             query?: {
+                project?: string;
+                persona?: string;
+                collection?: string;
+                world?: string;
                 cursor?: string;
                 limit?: number;
             };
@@ -2563,7 +2750,7 @@ export interface operations {
             };
         };
     };
-    create_schedule: {
+    create_reminder: {
         parameters: {
             query?: never;
             header?: never;
@@ -2572,44 +2759,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ScheduleInput"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    change_schedule: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                schedule_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ScheduleChange"];
+                "application/json": components["schemas"]["ReminderInput"];
             };
         };
         responses: {
@@ -2668,7 +2818,7 @@ export interface operations {
             };
         };
     };
-    contact_tick: {
+    run_reminders: {
         parameters: {
             query?: {
                 deliver?: boolean;
@@ -2678,6 +2828,43 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    change_reminder: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                schedule_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReminderChange"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -2728,7 +2915,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                key: "models" | "budgets" | "scenarios" | "connections" | "maintenance" | "parsers";
+                key: "models" | "budgets" | "scenarios" | "connections" | "maintenance" | "parsers" | "ranking";
             };
             cookie?: never;
         };
@@ -2761,7 +2948,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                key: "budgets" | "scenarios" | "connections" | "maintenance" | "parsers";
+                key: "budgets" | "scenarios" | "connections" | "maintenance" | "parsers" | "ranking";
             };
             cookie?: never;
         };

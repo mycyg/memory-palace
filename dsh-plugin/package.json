@@ -1,7 +1,7 @@
 {
   "name": "dsh-eventmem",
-  "version": "1.0.0",
-  "description": "eventmem host adapter for the DeepSeek Harness: event-based agent memory shared with the Python eventmem implementation",
+  "version": "2.0.0",
+  "description": "MemoryPalace host adapter for DeepSeek Harness using the shared local service",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
@@ -34,7 +34,7 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "fixtures": "python3 scripts/gen-fixtures.py"
+    "fixtures": "node -e \"console.log('No legacy fixtures required')\""
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.1"

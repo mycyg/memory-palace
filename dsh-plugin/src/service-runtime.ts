@@ -1,4 +1,4 @@
-/** MemoryPalace 1.0 host transport. Recall and lifecycle policy live in Python. */
+/** Durable host transport. Recall and lifecycle policy live in the service. */
 import { createHash, randomUUID } from "node:crypto";
 import {
   mkdirSync,
@@ -13,8 +13,19 @@ import {
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Config } from "./config.js";
-import type { InjectFn, ToolObservation, MaintenanceHost } from "./runtime.js";
-import type { FeedTodo } from "./feed.js";
+
+export type InjectFn = (text: string) => void;
+export interface ToolObservation {
+  sessionId: string;
+  cwd: string;
+  toolName: string;
+  callId: string;
+  args: unknown;
+  isError: boolean;
+  value?: unknown;
+  errorMessage?: string;
+  contentText: string;
+}
 
 export class ServiceRuntime {
   private pending = new Map<string, Promise<void>>();
@@ -23,6 +34,45 @@ export class ServiceRuntime {
   constructor(readonly config: Config) {}
   private root() {
     return process.env.EVENTMEM_HOME ?? join(homedir(), ".memorypalace");
+  }
+  private spool(value: unknown): { raw: string; path: string } {
+    const raw = JSON.stringify(value);
+    const directory = join(this.root(), "host-spool");
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    const path = join(directory, createHash("sha256").update(raw).digest("hex") + ".json");
+    const temporary = path + "." + randomUUID() + ".tmp";
+    const descriptor = openSync(temporary, "wx", 0o600);
+    try {
+      writeFileSync(descriptor, raw);
+      fsyncSync(descriptor);
+    } finally {
+      closeSync(descriptor);
+    }
+    renameSync(temporary, path);
+    return { raw, path };
+  }
+  private async settle(sessionId: string, cwd: string, delivery: { id: string; body_hash: string }, body: string): Promise<void> {
+    if (createHash("sha256").update(body).digest("hex") !== delivery.body_hash) return;
+    const receipt = {
+      session: sessionId,
+      scope: { project: cwd, persona: "default", collection: "default", world: "real" },
+      delivery_id: delivery.id,
+      body_hash: delivery.body_hash,
+      state: "accepted",
+    };
+    const pending = this.spool({ event: "context_receipt", payload: receipt });
+    try {
+      const token = readFileSync(join(this.root(), "local-token"), "utf8").trim();
+      const response = await fetch(
+        (process.env.EVENTMEM_URL ?? "http://127.0.0.1:8319") + "/v1/context/receipts",
+        { method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+          body: JSON.stringify(receipt), signal: AbortSignal.timeout(7000) },
+      );
+      if (!response.ok) throw new Error("Context receipt was not accepted");
+      unlinkSync(pending.path);
+    } catch {
+      // The service worker replays the exact accepted receipt after recovery.
+    }
   }
   private send(
     sessionId: string,
@@ -41,22 +91,7 @@ export class ServiceRuntime {
         host: "deepseek-harness",
       },
     };
-    const raw = JSON.stringify(normalized);
-    const directory = join(this.root(), "host-spool");
-    mkdirSync(directory, { recursive: true, mode: 0o700 });
-    const path = join(
-      directory,
-      createHash("sha256").update(raw).digest("hex") + ".json",
-    );
-    const temporary = path + "." + randomUUID() + ".tmp";
-    const descriptor = openSync(temporary, "wx", 0o600);
-    try {
-      writeFileSync(descriptor, raw);
-      fsyncSync(descriptor);
-    } finally {
-      closeSync(descriptor);
-    }
-    renameSync(temporary, path);
+    const pending = this.spool(normalized);
     const operation = (this.pending.get(sessionId) ?? Promise.resolve()).then(
       async () => {
         try {
@@ -73,20 +108,25 @@ export class ServiceRuntime {
                 "Content-Type": "application/json",
                 Authorization: `Bearer ${token}`,
               },
-              body: raw,
+              body: pending.raw,
               signal: AbortSignal.timeout(7000),
             },
           );
           if (!response.ok)
             throw new Error(`MemoryPalace HTTP ${response.status}`);
-          const result = (await response.json()) as { text?: string };
+          const result = (await response.json()) as {
+            text?: string;
+            delivery?: { id: string; body_hash: string };
+          };
           try {
-            unlinkSync(path);
+            unlinkSync(pending.path);
           } catch {
             /* worker may already have replayed receipt */
           }
-          if (result.text && inject && !this.closed.has(sessionId))
+          if (result.text && inject && !this.closed.has(sessionId)) {
             inject(result.text);
+            if (result.delivery) await this.settle(sessionId, cwd, result.delivery, result.text);
+          }
         } catch {
           // The private spool remains for service replay. A failed call never
           // acknowledges receipt or computes an alternate local recall ranking.
@@ -154,7 +194,7 @@ export class ServiceRuntime {
   todoWrite(
     sessionId: string,
     cwd: string,
-    todos: readonly FeedTodo[],
+    todos: readonly unknown[],
     inject: InjectFn,
   ): void {
     if (!this.config.writeFeed) return;
@@ -183,12 +223,6 @@ export class ServiceRuntime {
         data: { kind, ...data },
         command_id: `${kind}:${String(data.seq ?? randomUUID())}`,
       });
-  }
-  onIdle(_sessionId: string, _cwd: string, _host: MaintenanceHost): void {
-    /* durable server worker owns maintenance */
-  }
-  onBusy(_sessionId: string): void {
-    /* interactions automatically throttle server work */
   }
   async flush(sessionId: string): Promise<void> {
     await this.pending.get(sessionId);

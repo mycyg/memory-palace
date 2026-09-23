@@ -121,6 +121,8 @@ class DeliveryInbox:
                 "SELECT body FROM deliveries WHERE id=?", (delivery["id"],)
             ).fetchone()
             if existing:
+                if json.loads(existing[0]) != delivery:
+                    raise ValueError("Delivery ID belongs to a different body")
                 return False
             handler(conn, delivery)
             conn.execute(

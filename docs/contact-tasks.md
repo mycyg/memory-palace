@@ -1,5 +1,7 @@
 # Contact tasks
 
+> **Historical 1.x application note.** These contact-task tools and companion policies are retired from the MemoryPalace 2.0 public API. Use [work reminders](reminders.md) for the current explicit schedule and callback flow.
+
 The MCP server provides `create_contact_task`, `list_contact_tasks` and `manage_contact_task`. A host can create a reminder with its conversation basis, inspect the current revision and delivery state, and pause, resume, reschedule, cancel or confirm it. The Python `ContactTasks` interface uses the same implementation. `schedule_contact` remains available for scheduling an existing memory record.
 
 ## Configure a policy

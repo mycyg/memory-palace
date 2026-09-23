@@ -8,8 +8,8 @@ import sys
 from pathlib import Path
 
 from eventmem.core.models import Scope
+from eventmem.core.files import atomic_write
 from eventmem.hooks.codex import EVENTS
-from eventmem.paths import atomic_write
 
 MODULE = "eventmem.hooks.codex"
 

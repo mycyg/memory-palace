@@ -1,5 +1,7 @@
 # eventmem 实现规格（SPEC）
 
+> 历史实现规格（MemoryPalace 0.x）。本文描述早期文件存储与 hooks 方案，不适用于 2.0；当前架构以 [docs/architecture.md](docs/architecture.md) 为准。
+
 版本：v0.1。本文件是实现的契约：模块边界、接口签名、文件格式、协议、编码纪律。设计依据见 [DESIGN.md](DESIGN.md)，冲突时以 DESIGN.md 的设计意图为准、以本文件的接口为准。
 
 ## 1. 技术选型
