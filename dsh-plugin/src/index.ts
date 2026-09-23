@@ -39,7 +39,9 @@ export function apply(ctx: Context, config: Config): void {
   const agents = new Map<string, Agent>()
   const cwdOf = (session: Session) => session.header.cwd ?? process.cwd()
   const injectVia = (agent: Agent): InjectFn => (text) => {
-    agent.inject(createUserMessage({ content: [{ type: 'text', text }], source: SOURCE }))
+    const message = createUserMessage({ content: [{ type: 'text', text }], source: SOURCE })
+    agent.inject(message)
+    return String(message.id)
   }
   const agentFor = (session: Session): Agent | undefined =>
     agents.get(session.id) ?? ctx.get('agents')?.get(session.id)
@@ -47,6 +49,15 @@ export function apply(ctx: Context, config: Config): void {
   ctx.on('agent/session-start', ({ agent, source }) => safe(() => {
     agents.set(agent.session.id, agent)
     runtime.sessionStart(agent.session.id, cwdOf(agent.session), injectVia(agent), source)
+  }))
+
+  ctx.on('agent/inbox/claimed', ({ agent, message, turn }) => safe(() => {
+    if (message.source.kind === 'plugin' && message.source.plugin === name)
+      runtime.contextClaimed(agent.session.id, String(message.id), textOf(message.content), turn)
+  }))
+  ctx.on('agent/inbox/discarded', ({ agent, message }) => safe(() => {
+    if (message.source.kind === 'plugin' && message.source.plugin === name)
+      runtime.contextDiscarded(agent.session.id, String(message.id), textOf(message.content))
   }))
 
   ctx.on('tools/execute', async (exec, next) => {
@@ -82,6 +93,8 @@ export function apply(ctx: Context, config: Config): void {
       case 'user/message':
         if (event.data.source.kind === 'user')
           runtime.message(session.id, cwd, 'user', textOf(event.data.content), event.seq)
+        else if (event.data.source.kind === 'plugin' && event.data.source.plugin === name)
+          runtime.contextEntered(session.id, String(event.data.id), textOf(event.data.content))
         break
       case 'assistant/message':
         runtime.message(session.id, cwd, 'assistant', textOf(event.data.message.content), event.seq)
@@ -92,9 +105,19 @@ export function apply(ctx: Context, config: Config): void {
         break
       }
       case 'turn/start':
+        runtime.turnStarted(session.id, event.data.turn)
+        runtime.boundary(session.id, cwd, event.type, { ...event.data, seq: event.seq })
+        break
       case 'turn/end':
+        runtime.turnEnded(session.id, event.data.turn)
+        runtime.boundary(session.id, cwd, event.type, { ...event.data, seq: event.seq })
+        break
       case 'step/start':
+        runtime.stepStarted(session.id, event.data.turn)
+        runtime.boundary(session.id, cwd, event.type, { ...event.data, seq: event.seq })
+        break
       case 'step/end':
+        runtime.stepEnded(session.id, event.data.turn)
         runtime.boundary(session.id, cwd, event.type, { ...event.data, seq: event.seq })
         break
     }

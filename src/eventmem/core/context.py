@@ -20,7 +20,7 @@ class ContextReceipt(Model):
     scope: Scope = Field(default_factory=Scope)
     delivery_id: str
     body_hash: str
-    state: Literal["sending", "unconfirmed", "accepted"]
+    state: Literal["sending", "unconfirmed", "accepted", "discarded"]
 
 
 def session_state(conn, session, scope):
@@ -47,10 +47,20 @@ def save_session(conn, session, scope, state):
 def prepare_context(state, request, text, items, token_count):
     epoch = state["epoch"]
     body_hash = digest(text.encode())
-    identity = (
-        "ctx_" + digest([request.session, epoch, request.host_mode, body_hash])[:32]
-    )
     state["delivery_sequence"] = state.get("delivery_sequence", 0) + 1
+    # Repeated text is a new operation, not a reason to reopen an accepted receipt.
+    identity = (
+        "ctx_"
+        + digest(
+            [
+                request.session,
+                epoch,
+                state["delivery_sequence"],
+                request.host_mode,
+                body_hash,
+            ]
+        )[:32]
+    )
     receipt = {
         "id": identity,
         "body_hash": body_hash,
@@ -68,7 +78,7 @@ def prepare_context(state, request, text, items, token_count):
     settled = [
         key
         for key, value in state["deliveries"].items()
-        if value["state"] == "accepted"
+        if value["state"] in {"accepted", "discarded"}
     ]
     for key in settled[:-32]:
         del state["deliveries"][key]
@@ -83,10 +93,10 @@ def settle_context(engine, request: ContextReceipt):
             raise Missing("Context delivery")
         if delivery["body_hash"] != request.body_hash:
             raise Conflict("Receipt body differs from prepared context")
-        if delivery["state"] == "accepted":
+        if delivery["state"] in {"accepted", "discarded"}:
             return {
                 "id": request.delivery_id,
-                "state": "accepted",
+                "state": delivery["state"],
                 "epoch": delivery["epoch"],
                 "session_used": state["used"],
             }

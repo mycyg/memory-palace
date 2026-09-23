@@ -39,6 +39,14 @@ from eventmem.core.models import (
 
 from eventmem.core.scheduler import Scheduler
 
+from eventmem.core.organize import (
+    Organizer,
+    prepare_events,
+    prepare_summary,
+    prepare_summary_part,
+)
+from eventmem.core.providers import Providers
+
 
 @pytest.fixture
 def engine(tmp_path):
@@ -48,6 +56,125 @@ def engine(tmp_path):
 def remember(engine, text="port range allocation", key="a", **kwargs):
     source = engine.receive(SourceInput(namespace="test", key=key, text=text, **kwargs))
     return engine.source(source["id"])["record_ids"][0]
+
+
+def apply_prepared(engine, prepared):
+    with engine.db.connect(write=True) as conn:
+        prepared(conn)
+        engine.db.bump(conn)
+
+
+def test_family_edit_withdraws_current_summary_without_erasing_evidence(engine):
+    old = remember(engine, "Atlas staging is pending.", key="old")
+    new = remember(engine, "Atlas staging is complete.", key="new")
+    organizer = Organizer(engine)
+    family = organizer.create(Scope(), "Atlas staging", [old], "event")
+    apply_prepared(engine, prepare_summary(engine, {"family_id": family["id"]}))
+    summary_id = organizer.list(Scope())[0]["summary"]["record_id"]
+    original = engine.get(summary_id)
+
+    changed = organizer.change(family["id"], 1, "revise", members=[new])
+    withdrawn = engine.get(summary_id)
+    assert changed["summary"]["state"] == "dirty"
+    assert withdrawn["status"] == "unverified"
+    assert withdrawn["source_ids"] == original["source_ids"]
+    assert withdrawn["evidence_ids"] == original["evidence_ids"]
+    recalled = engine.recall(RecallRequest(query="Atlas staging"))
+    assert summary_id not in {item["id"] for item in recalled["items"]}
+    with engine.db.connect() as conn:
+        actions = [
+            row[0]
+            for row in conn.execute(
+                "SELECT action FROM revisions WHERE record_id=? ORDER BY revision",
+                (summary_id,),
+            )
+        ]
+    assert actions == ["create", "summary_invalidated"]
+
+    apply_prepared(engine, prepare_summary(engine, {"family_id": family["id"]}))
+    refreshed = organizer.list(Scope())[0]
+    current_id = refreshed["summary"]["record_id"]
+    assert current_id != summary_id
+    rolled_back = organizer.change(
+        family["id"], refreshed["revision"], "rollback", target_revision=1
+    )
+    assert rolled_back["members"] == [old]
+    assert engine.get(current_id)["status"] == "unverified"
+
+
+def test_semantic_event_expansion_withdraws_previous_summary(engine, monkeypatch):
+    first = remember(engine, "Atlas staging started.", key="event-first")
+
+    def group(self, role, instruction, payload, **kwargs):
+        return {
+            "events": [
+                {
+                    "id": payload["candidate_events"][0]["id"]
+                    if payload["candidate_events"]
+                    else None,
+                    "title": "Atlas staging",
+                    "member_ids": [item["id"] for item in payload["records"]],
+                }
+            ]
+        }
+
+    monkeypatch.setattr(Providers, "json", group)
+    apply_prepared(engine, prepare_events(engine, Scope()))
+    organizer = Organizer(engine)
+    family = organizer.list(Scope())[0]
+    apply_prepared(engine, prepare_summary(engine, {"family_id": family["id"]}))
+    summary_id = organizer.list(Scope())[0]["summary"]["record_id"]
+
+    second = remember(engine, "Atlas staging completed.", key="event-second")
+    apply_prepared(engine, prepare_events(engine, Scope()))
+    expanded = organizer.list(Scope())[0]
+    assert set(expanded["members"]) == {first, second}
+    assert expanded["summary"]["state"] == "dirty"
+    assert engine.get(summary_id)["status"] == "unverified"
+
+
+def test_summary_part_cache_separates_event_titles(engine, monkeypatch):
+    rid = remember(engine, "Atlas long task remains pending. " * 2300, key="long")
+    organizer = Organizer(engine)
+    alpha = organizer.create(Scope(), "Project Alpha", [rid], "event")
+    beta = organizer.create(Scope(), "Project Beta", [rid], "event")
+
+    def summary(self, role, instruction, payload, **kwargs):
+        assert role == "summary"
+        return {
+            "content": "Summary for " + payload["title"],
+            "evidence_ids": [payload["records"][0]["id"]],
+        }
+
+    monkeypatch.setattr(Providers, "json", summary)
+    apply_prepared(engine, prepare_summary(engine, {"family_id": alpha["id"]}))
+    with engine.db.connect() as conn:
+        alpha_parts = [
+            json.loads(row[0])
+            for row in conn.execute(
+                "SELECT payload FROM jobs WHERE kind='summary_part' AND json_extract(payload,'$.family_id')=?",
+                (alpha["id"],),
+            )
+        ]
+    assert len(alpha_parts) > 1
+    for part in alpha_parts:
+        apply_prepared(engine, prepare_summary_part(engine, part))
+
+    apply_prepared(engine, prepare_summary(engine, {"family_id": beta["id"]}))
+    with engine.db.connect() as conn:
+        beta_parts = [
+            json.loads(row[0])
+            for row in conn.execute(
+                "SELECT payload FROM jobs WHERE kind='summary_part' AND json_extract(payload,'$.family_id')=?",
+                (beta["id"],),
+            )
+        ]
+    assert len(beta_parts) == len(alpha_parts)
+    alpha_ids = {part["record_id"] for part in alpha_parts}
+    beta_ids = {part["record_id"] for part in beta_parts}
+    assert alpha_ids.isdisjoint(beta_ids)
+    apply_prepared(engine, prepare_summary_part(engine, beta_parts[0]))
+    assert engine.get(beta_parts[0]["record_id"])["content"] == "Summary for Project Beta"
 
 
 def test_idempotence_durable_receipt_and_concurrent_revisions(engine):

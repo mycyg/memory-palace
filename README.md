@@ -39,7 +39,11 @@ uv run eventmem recall --root ./example-data --json '{"query":"rollback artifact
 
 来源的原文和模型生成的摘要分别标记。模型配置仅用于选择启用的后台能力；没有配置时，来源接收、修订和本地召回仍可使用。提醒记录计划和回调状态，收件人、渠道权限及实际发送由宿主负责。
 
+准备或排队的上下文只预留容量；宿主对同一正文返回有效 `accepted` 回执后才计入已用预算，明确丢弃则释放预留。后台作业超时后，本地调用结束前仍占用执行容量。
+
 2.0 更新了公开契约，不兼容部分 1.x 接口。升级现有数据时先备份，然后迁移到**空的独立目录**；迁移不会改写旧库。详见[安装与迁移](docs/operations.md)。
+
+备份仅收录 SQLite 快照实际引用的附件。恢复先在隔离目录校验数据库与附件，完成准备后才发布到空目标。
 
 [当前架构](docs/architecture.md) · [接入与运维](docs/operations.md) · [工作示例](examples/README.md) · [工作提醒](docs/reminders.md) · [Codex 接入](docs/codex.md) · [2.0 合成基准](docs/benchmarks/work-memory-v2.md) · [历史 1.x 性能记录](docs/performance.md)
 

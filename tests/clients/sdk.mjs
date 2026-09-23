@@ -12,6 +12,9 @@ test('HTTP failure is surfaced and attachments remain binary',async()=>{
  const bytes=new Client('http://127.0.0.1','fixture',async()=>new Response(new Uint8Array([1,2,3]),{headers:{'Content-Type':'application/octet-stream'}}));assert.deepEqual([...new Uint8Array(await bytes.call('read_attachment',{path:{source_id:'src'}}))],[1,2,3]);
 });
 test('callback transaction deduplicates one logical effect',async()=>{
- const rows=new Map();let effects=0;const store={transaction:fn=>fn({has:async id=>rows.has(id),put:async(id,body)=>{rows.set(id,body)}})};
- assert.equal(await acceptDelivery(store,{id:'stable'},async()=>{effects++}),true);assert.equal(await acceptDelivery(store,{id:'stable'},async()=>{effects++}),false);assert.equal(effects,1);
+ const rows=new Map();let effects=0;const store={transaction:fn=>fn({get:async id=>rows.get(id),put:async(id,body)=>{rows.set(id,body)}})};
+ assert.equal(await acceptDelivery(store,{id:'stable',text:'first'},async()=>{effects++}),true);
+ assert.equal(await acceptDelivery(store,{text:'first',id:'stable'},async()=>{effects++}),false);
+ await assert.rejects(acceptDelivery(store,{id:'stable',text:'changed'},async()=>{effects++}),/different body/);
+ assert.equal(effects,1);
 });

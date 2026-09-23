@@ -51,6 +51,15 @@ test('explicit reminder can be canceled with its delivery outcome', async ({ pag
   await page.getByLabel('到期时间').fill('2030-09-09T10:00');
   await page.getByRole('button', { name: '安排提醒' }).click();
   await expect(page.locator('.family').filter({ hasText: 'scheduled' }).first()).toBeVisible();
+  await page.route('**/v1/reminders/schedule_*', async route => {
+    if (route.request().method() !== 'POST') return route.continue();
+    const response = await route.fetch();
+    await route.fulfill({ response, json: {
+      ...await response.json(), reconciliation_required: true,
+      deliveries: [{ id: 'delivery-fixture', outcome: 'possibly_sent' }],
+    } });
+  });
   await page.locator('.family').filter({ hasText: 'scheduled' }).first().getByRole('button', { name: '取消' }).click();
   await expect(page.locator('.family').filter({ hasText: 'canceled' }).first()).toBeVisible();
+  await expect(page.getByRole('status')).toContainText('可能已发送；请按投递 ID 核对回执');
 });

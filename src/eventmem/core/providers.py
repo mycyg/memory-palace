@@ -4,10 +4,18 @@ import base64
 import json
 import os
 import time
+from contextvars import ContextVar
 
 import httpx
 
 from .models import ModelRole
+
+
+# One attempt budget follows nested calls in this worker, without mutating shared
+# provider configuration or giving every request a fresh timeout.
+request_deadline: ContextVar[float | None] = ContextVar(
+    "request_deadline", default=None
+)
 
 
 class NotConfigured(Exception):
@@ -85,8 +93,17 @@ class Providers:
             )
 
         try:
+            # Local model startup also spends the attempt budget. Check at the
+            # transport boundary so startup cannot launch an already-expired call.
+            timeout = config.timeout_seconds
+            deadline = request_deadline.get()
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("Job execution deadline exceeded")
+                timeout = min(timeout, remaining)
             with httpx.Client(
-                timeout=config.timeout_seconds,
+                timeout=timeout,
                 follow_redirects=False,
                 trust_env=not local,
             ) as client:

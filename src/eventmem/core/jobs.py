@@ -7,7 +7,7 @@ import uuid
 
 from .db import Conflict, Deleted, Missing, digest, dumps
 from .models import RecordInput, Scope, now
-from .providers import NotConfigured, ProviderError, Providers
+from .providers import NotConfigured, ProviderError, Providers, request_deadline
 
 
 class Worker:
@@ -115,27 +115,19 @@ class Worker:
             timeout = float(
                 self.engine.settings("maintenance").get("job_timeout_seconds", 300)
             )
-            timeout = max(0.1, min(3600, timeout))
-            finished = threading.Event()
-            outcome = {}
-
-            def prepare():
-                try:
-                    outcome["apply"] = self.prepare(job)
-                except Exception as exc:
-                    outcome["error"] = exc
-                finally:
-                    finished.set()
-
-            threading.Thread(target=prepare, daemon=True).start()
-            if not finished.wait(timeout):
-                raise TimeoutError("Job execution deadline exceeded")
-            if "error" in outcome:
-                raise outcome["error"]
-            apply = outcome["apply"]
+            deadline = time.monotonic() + timeout
+            token = request_deadline.set(deadline)
+            try:
+                # Keep the lease until preparation really exits. Noninterruptible
+                # local work cannot release capacity merely because time expired.
+                apply = self.prepare(job)
+            finally:
+                request_deadline.reset(token)
             with self.engine.db.connect(write=True) as conn:
                 if not self.owns(conn, job):
                     return True
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("Job execution deadline exceeded")
                 row = conn.execute(
                     "SELECT data FROM settings WHERE key='models'"
                 ).fetchone()
@@ -451,6 +443,12 @@ class Worker:
             )
 
             def apply(conn):
+                for record in hits["items"]:
+                    if (
+                        engine._get(conn, record["id"])["revision"]
+                        != record["revision"]
+                    ):
+                        raise Conflict("Conflict evidence changed during execution")
                 for relation in result.get("relations", [])[:20]:
                     if (
                         relation.get("id") in {r["id"] for r in hits["items"]}
@@ -656,7 +654,14 @@ class Worker:
                     settle_context(
                         self.engine, ContextReceipt.model_validate(data["payload"])
                     )
-                elif data["event"] in {"tool", "message", "boundary", "end", "compact"}:
+                elif data["event"] in {
+                    "start",
+                    "tool",
+                    "message",
+                    "boundary",
+                    "end",
+                    "compact",
+                }:
                     handle(
                         self.engine, data["event"], data["payload"], receipt_only=True
                     )

@@ -1,5 +1,6 @@
 """Work-memory boundaries exercised with isolated stores and deterministic model replies."""
 
+import json
 import threading
 import time
 
@@ -166,25 +167,87 @@ def test_context_receipts_and_completed_compaction(tmp_path):
     assert settle_context(engine, accepted)["session_used"] == new["tokens"]
     assert not engine.recall(q)["items"]
 
+    # A/B/A replacement preparations are three operations even when A repeats.
+    for key in ("alpha", "beta"):
+        source(engine, key, key.upper() + " deployment checkpoint.")
+    replace = q.model_copy(update={"host_mode": "replace", "limit": 1})
+    results = []
+    for key in ("alpha", "beta", "alpha"):
+        result = engine.recall(replace.model_copy(update={"query": key}))
+        results.append(result)
+        if len(results) < 3:
+            d = result["delivery"]
+            settle_context(
+                engine,
+                receipt.model_copy(
+                    update={"delivery_id": d["id"], "body_hash": d["body_hash"]}
+                ),
+            )
+    assert results[0]["delivery"]["id"] != results[2]["delivery"]["id"]
+    d = results[0]["delivery"]
+    settle_context(
+        engine,
+        receipt.model_copy(
+            update={"delivery_id": d["id"], "body_hash": d["body_hash"]}
+        ),
+    )
+    with engine.db.connect() as conn:
+        state = json.loads(
+            conn.execute(
+                "SELECT data FROM sessions WHERE id=?", (q.session,)
+            ).fetchone()[0]
+        )
+    assert state["resident"] == {r["id"]: r["revision"] for r in results[1]["items"]}
+    # Exact native rejection releases reservations, without inventing acceptance.
+    discarded_query = q.model_copy(
+        update={"session": "discarded-input", "query": "alpha"}
+    )
+    prepared = engine.recall(discarded_query)
+    d = prepared["delivery"]
+    discard = ContextReceipt(
+        session=discarded_query.session,
+        delivery_id=d["id"],
+        body_hash=d["body_hash"],
+        state="discarded",
+    )
+    assert not engine.recall(discarded_query)["items"]
+    assert settle_context(engine, discard)["session_used"] == 0
+    assert (
+        settle_context(engine, discard.model_copy(update={"state": "accepted"}))[
+            "state"
+        ]
+        == "discarded"
+    )
+    assert engine.recall(discarded_query)["items"]
+
 
 def test_worker_timeout_late_result_and_capacity_wait(tmp_path, monkeypatch):
     engine = Engine(tmp_path)
     engine.settings("maintenance", {"job_timeout_seconds": 0.1, "concurrency": 1})
     jid = engine.enqueue("probe", {}, "probe")
-    released, prepared = threading.Event(), threading.Event()
+    released, preparing = threading.Event(), threading.Event()
 
     def slow(job):
+        preparing.set()
         released.wait(2)
-        prepared.set()
         return lambda conn: conn.execute(
             "INSERT INTO settings VALUES('late-result','true')"
         )
 
     worker = Worker(engine)
     monkeypatch.setattr(worker, "prepare", slow)
-    assert worker.run_once()
-    released.set()
-    assert prepared.wait(1)
+    attempt = threading.Thread(target=worker.run_once)
+    attempt.start()
+    try:
+        assert preparing.wait(1)
+        attempt.join(0.15)
+        assert attempt.is_alive()
+        engine.enqueue("probe", {}, "other-probe")
+        assert Worker(engine).claim() is None
+    finally:
+        released.set()
+        attempt.join(2)
+    assert not attempt.is_alive()
     with engine.db.connect() as conn:
         row = conn.execute(
             "SELECT state,attempts FROM jobs WHERE id=?", (jid,)
@@ -230,6 +293,40 @@ def test_provider_truncation_is_one_failed_attempt(tmp_path, monkeypatch):
     with pytest.raises(ProviderError, match="budget"):
         Providers(engine).json("summary", "Summarize", {})
     assert len(calls) == 1
+
+
+def test_provider_deadline_includes_local_model_startup(tmp_path, monkeypatch):
+    from eventmem.core import local_embedding
+    from eventmem.core.providers import request_deadline
+
+    engine = Engine(tmp_path)
+    engine.settings(
+        "models",
+        {
+            "embedding": {
+                "endpoint": "http://localhost/v1",
+                "model": "fixture",
+                "local_embedding": True,
+            }
+        },
+    )
+    clock = [0.0]
+
+    def wake(*args):
+        clock[0] = 2.0
+        return "fixture-token"
+
+    monkeypatch.setattr(local_embedding, "ensure_started", wake)
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        "httpx.Client", lambda **kw: pytest.fail("Expired attempt opened a request")
+    )
+    token = request_deadline.set(1.0)
+    try:
+        with pytest.raises(TimeoutError, match="deadline"):
+            Providers(engine).request("embedding", "embeddings", json_={})
+    finally:
+        request_deadline.reset(token)
 
 
 def test_procedure_counterexample_rechecks_and_real_usage_dedup(tmp_path, monkeypatch):
@@ -290,13 +387,14 @@ def test_procedure_counterexample_rechecks_and_real_usage_dedup(tmp_path, monkey
         )
 
 
-def test_source_revision_invalidates_derived_summary(tmp_path):
+@pytest.mark.parametrize("kind", ["knowledge", "observation"])
+def test_source_revision_invalidates_derived_summary(tmp_path, kind):
     engine = Engine(tmp_path)
     a = source(
         engine,
         "document",
         "Release A passed staging.",
-        kind="knowledge",
+        kind=kind,
         version="1",
         occurred_at="2026-01-01T00:00:00Z",
     )
@@ -314,7 +412,7 @@ def test_source_revision_invalidates_derived_summary(tmp_path):
         engine,
         "document",
         "Correction: release A failed staging.",
-        kind="knowledge",
+        kind=kind,
         version="2",
         occurred_at="2026-01-02T00:00:00Z",
     )
@@ -374,6 +472,12 @@ def test_delete_keeps_unrelated_receipts_and_scrubs_pending_summary_text(tmp_pat
     )
     q = RecallRequest(query="release", session="kept-session", phase="startup")
     prepared = engine.recall(q)
+    with engine.db.connect(write=True) as conn:
+        conn.execute(
+            "UPDATE jobs SET state='failed',error=? WHERE id=?",
+            ("Invalid input: Private planning detail A.", jid),
+        )
+    Worker(engine).recover([jid], command_id="retry-summary")
     engine.delete(a)
     with pytest.raises(Missing):
         engine.get(a)
@@ -383,6 +487,18 @@ def test_delete_keeps_unrelated_receipts_and_scrubs_pending_summary_text(tmp_pat
             "SELECT state,payload FROM jobs WHERE id=?", (jid,)
         ).fetchone()
         assert tuple(job) == ("canceled", "{}")
+        assert (
+            conn.execute(
+                "SELECT target FROM job_recovery WHERE job_id=?", (jid,)
+            ).fetchone()[0]
+            == "[deleted]"
+        )
+        assert (
+            conn.execute(
+                "SELECT prev_error FROM job_recovery WHERE job_id=?", (jid,)
+            ).fetchone()[0]
+            is None
+        )
     d = prepared["delivery"]
     accepted = settle_context(
         engine,
@@ -447,3 +563,44 @@ def test_source_identity_includes_provenance_changes(tmp_path):
         engine.receive(source.model_copy(update={"authority": "operation"}))
     with pytest.raises(Conflict, match="new version"):
         engine.receive(source.model_copy(update={"metadata": {"result": "accepted"}}))
+
+
+def test_conflict_proposal_rechecks_targets_and_flags_procedures(tmp_path, monkeypatch):
+    engine = Engine(tmp_path)
+    method = source(
+        engine,
+        "method",
+        "Retry uploads after confirming non-delivery.",
+        kind="procedure",
+    )
+    result = source(engine, "result", "Retry caused two uploads.")
+    monkeypatch.setattr(
+        Providers,
+        "json",
+        lambda *a, **kw: {
+            "relations": [
+                {"id": method, "relation": "refutes", "reason": "Duplicate upload"}
+            ]
+        },
+    )
+    job = {"kind": "conflict", "payload": dumps({"record_id": result})}
+    commit = Worker(engine).prepare(job)
+    engine.revise(
+        method,
+        RevisionInput(
+            expected_revision=1,
+            command_id="correct-method",
+            action="correct",
+            content="Never retry an upload whose acceptance is unknown.",
+        ),
+    )
+    with pytest.raises(Conflict, match="evidence changed"):
+        apply(engine, commit)
+    with engine.db.connect() as conn:
+        assert not conn.execute("SELECT 1 FROM relations").fetchone()
+    apply(engine, Worker(engine).prepare(job))
+    updated = engine.get(method)
+    assert updated["attributes"]["review_required"]
+    # An identical relation has no new evidence and must not schedule another review.
+    apply(engine, Worker(engine).prepare(job))
+    assert engine.get(method)["revision"] == updated["revision"]

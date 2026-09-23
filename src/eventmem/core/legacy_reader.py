@@ -63,13 +63,17 @@ def event_from_markdown(raw: bytes) -> LegacyEvent:
 
 
 def archived_ids(root: Path) -> set[str]:
-    ids: set[str] = set()
     for path in (
         root / "index" / "archive-index.md",
         root / "state" / "archive-index.md",
     ):
-        if path.is_file():
-            for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-                if "|" in line and not line.lstrip().startswith("#"):
-                    ids.add(line.split("|", 1)[0].strip())
-    return ids
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        return {
+            line.split("|", 1)[0].strip()
+            for line in lines
+            if "|" in line and not line.lstrip().startswith("#")
+        }
+    return set()

@@ -14,7 +14,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Config } from "./config.js";
 
-export type InjectFn = (text: string) => void;
+export type InjectFn = (text: string) => string;
 export interface ToolObservation {
   sessionId: string;
   cwd: string;
@@ -31,6 +31,14 @@ export class ServiceRuntime {
   private pending = new Map<string, Promise<void>>();
   private sessions = new Map<string, string>();
   private closed = new Set<string>();
+  private activeSteps = new Map<string, number>();
+  private context = new Map<string, {
+    sessionId: string;
+    cwd: string;
+    body: string;
+    delivery: { id: string; body_hash: string };
+    claimedTurn?: number;
+  }>();
   constructor(readonly config: Config) {}
   private root() {
     return process.env.EVENTMEM_HOME ?? join(homedir(), ".memorypalace");
@@ -51,14 +59,14 @@ export class ServiceRuntime {
     renameSync(temporary, path);
     return { raw, path };
   }
-  private async settle(sessionId: string, cwd: string, delivery: { id: string; body_hash: string }, body: string): Promise<void> {
+  private async settle(sessionId: string, cwd: string, delivery: { id: string; body_hash: string }, body: string, state: "accepted" | "discarded"): Promise<void> {
     if (createHash("sha256").update(body).digest("hex") !== delivery.body_hash) return;
     const receipt = {
       session: sessionId,
       scope: { project: cwd, persona: "default", collection: "default", world: "real" },
       delivery_id: delivery.id,
       body_hash: delivery.body_hash,
-      state: "accepted",
+      state,
     };
     const pending = this.spool({ event: "context_receipt", payload: receipt });
     try {
@@ -124,8 +132,9 @@ export class ServiceRuntime {
             /* worker may already have replayed receipt */
           }
           if (result.text && inject && !this.closed.has(sessionId)) {
-            inject(result.text);
-            if (result.delivery) await this.settle(sessionId, cwd, result.delivery, result.text);
+            const messageId = inject(result.text);
+            if (result.delivery && messageId)
+              this.context.set(messageId, { sessionId, cwd, body: result.text, delivery: result.delivery });
           }
         } catch {
           // The private spool remains for service replay. A failed call never
@@ -142,11 +151,12 @@ export class ServiceRuntime {
     source?: string,
   ): void {
     this.closed.delete(sessionId);
+    const completedCompaction = source === "compact";
     this.send(
       sessionId,
       cwd,
-      source === "compact" ? "compact" : "start",
-      {},
+      completedCompaction ? "compact" : "start",
+      completedCompaction ? { command_id: randomUUID() } : {},
       this.config.injectWorkingSet ? inject : undefined,
     );
   }
@@ -224,6 +234,49 @@ export class ServiceRuntime {
         command_id: `${kind}:${String(data.seq ?? randomUUID())}`,
       });
   }
+  turnStarted(sessionId: string, _turn: number): void {
+    this.activeSteps.delete(sessionId);
+  }
+  contextClaimed(sessionId: string, messageId: string, body: string, turn: number): void {
+    const pending = this.context.get(messageId);
+    if (pending?.sessionId === sessionId && pending.body === body)
+      pending.claimedTurn = turn;
+  }
+  contextDiscarded(sessionId: string, messageId: string, body: string): void {
+    const pending = this.context.get(messageId);
+    if (pending?.sessionId !== sessionId || pending.body !== body) return;
+    this.context.delete(messageId);
+    this.queueReceipt(sessionId, pending, "discarded");
+  }
+  private queueReceipt(sessionId: string, pending: { cwd: string; body: string; delivery: { id: string; body_hash: string } }, state: "accepted" | "discarded"): void {
+    const earlier = this.pending.get(sessionId) ?? Promise.resolve();
+    this.pending.set(sessionId, earlier.then(() => this.settle(
+      sessionId, pending.cwd, pending.delivery, pending.body, state,
+    )));
+  }
+  contextEntered(sessionId: string, messageId: string, body: string): void {
+    const pending = this.context.get(messageId);
+    const activeTurn = this.activeSteps.get(sessionId);
+    // DSH opens a step before appending its model-visible user/message.
+    if (pending?.sessionId !== sessionId || pending.body !== body ||
+        activeTurn === undefined || pending.claimedTurn !== activeTurn) return;
+    this.context.delete(messageId);
+    this.queueReceipt(sessionId, pending, "accepted");
+  }
+  stepStarted(sessionId: string, turn: number): void {
+    this.activeSteps.set(sessionId, turn);
+  }
+  stepEnded(sessionId: string, turn: number): void {
+    if (this.activeSteps.get(sessionId) === turn) this.activeSteps.delete(sessionId);
+  }
+  turnEnded(sessionId: string, turn: number): void {
+    this.stepEnded(sessionId, turn);
+    for (const [messageId, pending] of this.context) {
+      if (pending.sessionId !== sessionId || pending.claimedTurn !== turn) continue;
+      this.context.delete(messageId);
+      this.queueReceipt(sessionId, pending, "discarded");
+    }
+  }
   async flush(sessionId: string): Promise<void> {
     await this.pending.get(sessionId);
   }
@@ -237,5 +290,8 @@ export class ServiceRuntime {
       this.send(sessionId, cwd, "end", { command_id: `end:${sessionId}` });
     this.closed.add(sessionId);
     this.sessions.delete(sessionId);
+    this.activeSteps.delete(sessionId);
+    for (const [messageId, pending] of this.context)
+      if (pending.sessionId === sessionId) this.context.delete(messageId);
   }
 }

@@ -39,7 +39,11 @@ uv run eventmem recall --root ./example-data --json '{"query":"rollback artifact
 
 Original sources and model-generated summaries carry different evidence labels. Model settings only enable selected background features; source receipt, revisions, and local recall work without them. Reminders track plans and callback results. The host owns recipients, channel permissions, and delivery.
 
+Prepared or queued context reserves capacity; only an exact-body `accepted` receipt counts it as received, and a confirmed discard releases the reservation. A timed-out background job retains its execution slot until its local call ends.
+
 Version 2.0 changes public contracts and breaks some 1.x integrations. Back up existing data and migrate into a **separate empty directory**; migration leaves the original store untouched. See [installation and migration](docs/operations.md).
+
+Backups include only attachments referenced by their SQLite snapshot. Restore checks the database and attachments in an isolated staging directory before publishing to an empty target.
 
 [Current architecture](docs/architecture.md) · [Integration and operations](docs/operations.md) · [Work examples](examples/README.md) · [Work reminders](docs/reminders.md) · [Codex integration](docs/codex.md) · [2.0 synthetic benchmark](docs/benchmarks/work-memory-v2.md) · [Historical 1.x measurements](docs/performance.md)
 

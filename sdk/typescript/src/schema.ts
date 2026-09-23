@@ -735,7 +735,7 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "sending" | "unconfirmed" | "accepted";
+            state: "sending" | "unconfirmed" | "accepted" | "discarded";
         };
         /** CreateRecord */
         CreateRecord: {

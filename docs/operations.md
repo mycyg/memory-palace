@@ -25,6 +25,10 @@ Model roles can be configured in the console or through `PUT /v1/settings/models
 
 Codex, Claude Code, and DeepSeek Harness plugins call the same local service. They use stable source identities and a local offline spool for observations. They do not maintain a legacy file-store runtime or another memory engine. The host controls whether and when context is injected; explicit MCP calls remain available. See the [Codex guide](codex.md) and each plugin's own README for installation.
 
+Preparing context reserves capacity without counting it as received. DeepSeek Harness confirms the exact plugin message only when it enters an active native model step; queueing alone leaves it unconfirmed. An exact native discard, or a claimed message whose turn ends without entering the model, releases that reservation through a `discarded` receipt. This receipt flow establishes request inclusion or rejection, not model understanding or task completion.
+
+A background attempt shares one deadline across model requests and checks it again before committing. Local preparation retains its execution slot until it returns, including work that cannot be interrupted. A transport timeout does not prove that a remote provider stopped processing the request.
+
 An HTTP client sends the local bearer token from `<root>/local-token`. The service defaults to loopback and does not provide multi-user authorization. Keep the token and root private. A plugin's accepted spool entry is an observation queued for receipt, not proof that the service stored it until a receipt is returned.
 
 ## Upgrade and recovery
@@ -42,7 +46,7 @@ eventmem export /private/exports/work-memory.jsonl --root /private/work-memory-v
 
 Legacy `diary`, `portrait`, `self_narrative`, and `prediction` records remain available for historical or audit reads. Version 2.0 rejects new records of those retired kinds.
 
-A backup restores into an empty root. Exported or downloaded files are independent copies of the data and are not removed by a record deletion. Permanent deletion follows source and derived-record dependencies in the active store; retain an isolated backup if you need a reversible recovery path.
+A backup contains the SQLite snapshot and only the attachments it references. Restore verifies the database and attachment checksums in isolated staging, prepares recovery and index rebuild, then publishes into an empty root. A failed restore leaves that target available for retry. Exported or downloaded files are independent copies of the data and are not removed by a record deletion. Permanent deletion follows source and derived-record dependencies in the active store; retain an isolated backup if you need a reversible recovery path.
 
 ## Reminders and callbacks
 

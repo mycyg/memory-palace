@@ -811,15 +811,6 @@ def create_app(root=None, *, engine=None, token=None, workers=True, mcp_enabled=
         ],
         value: dict = Body(),
     ) -> dict:
-        if key == "budgets":
-            for scenario, limits in value.items():
-                if not isinstance(limits, dict) or any(
-                    k not in {"startup", "passive", "cumulative"}
-                    or not isinstance(v, int)
-                    or not 0 <= v <= 128000
-                    for k, v in limits.items()
-                ):
-                    raise ValueError("Invalid token budget")
         return engine.settings(key, value)
 
     if mcp_server:

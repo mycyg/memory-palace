@@ -11,8 +11,8 @@ import pytest
 from eventmem.core import Engine
 from eventmem.core.db import Conflict, Missing, digest, dumps
 from eventmem.core.jobs import Worker
-from eventmem.core.models import Scope
-from eventmem.core.transfer import migrate
+from eventmem.core.models import Scope, SourceInput
+from eventmem.core.transfer import backup, migrate, restore
 
 STAMP = "2026-01-02T03:04:05+00:00"
 
@@ -230,9 +230,14 @@ def test_file_store_migration_preserves_raw_files_archives_and_ids(tmp_path):
     (source / "events").mkdir(parents=True)
     (source / "archive").mkdir()
     (source / "index").mkdir()
+    (source / "state").mkdir()
     active = _event("event-open", parent="event-frozen")
     (source / "events" / "event-open.md").write_bytes(active)
     (source / "index" / "archive-index.md").write_text("# Archive index\n\nevent-frozen | 2026-Q1 | Old work\n")
+    # v1 reads index/ first; state/ can lag after an interrupted thaw.
+    (source / "state" / "archive-index.md").write_text(
+        "# Archive index\n\nevent-open | 2026-Q1 | Stale marker\n"
+    )
     archived = _event("event-frozen", status="done")
     with tarfile.open(source / "archive" / "epoch-2026-Q1.tar.gz", "w:gz") as archive:
         info = tarfile.TarInfo("events/event-frozen.md")
@@ -242,7 +247,7 @@ def test_file_store_migration_preserves_raw_files_archives_and_ids(tmp_path):
     report = migrate(source, target, Scope(project="old-project"))
     assert report["format"] == "file-v0"
     assert report["records"] == 2
-    assert report["snapshots"] == 3
+    assert report["snapshots"] == 4
     engine = Engine(target)
     assert engine.get("event-open")["status"] == "active"
     assert engine.get("event-open")["parent_id"] == "event-frozen"
@@ -254,6 +259,88 @@ def test_file_store_migration_preserves_raw_files_archives_and_ids(tmp_path):
     assert (source / "events" / "event-open.md").read_bytes() == active
     with pytest.raises(Conflict, match="empty isolated target"):
         migrate(source, target)
+
+
+def test_backup_excludes_rejected_blobs_and_restore_retry_stays_empty(tmp_path, monkeypatch):
+    engine = Engine(tmp_path / "source")
+    source = SourceInput(namespace="audit", key="attachment", media_type="application/octet-stream")
+    accepted, rejected = b"accepted attachment", b"rejected attachment"
+    sid = engine.receive(source, accepted)["id"]
+    with pytest.raises(Conflict):
+        engine.receive(source, rejected)
+    archive = tmp_path / "backup.tar.gz"
+    backup(engine, archive)
+    with tarfile.open(archive) as stored:
+        names = set(stored.getnames())
+    assert "blobs/" + digest(accepted) in names
+    assert "blobs/" + digest(rejected) not in names
+
+    original_enqueue = Engine.enqueue
+
+    def interrupted_rebuild(self, kind, *args, **kwargs):
+        if kind == "rebuild":
+            raise OSError("interrupted rebuild")
+        return original_enqueue(self, kind, *args, **kwargs)
+
+    target = tmp_path / "restored"
+    with monkeypatch.context() as patch:
+        patch.setattr(Engine, "enqueue", interrupted_rebuild)
+        with pytest.raises(OSError, match="interrupted rebuild"):
+            restore(archive, target)
+    assert not target.exists() or not any(target.iterdir())
+    assert not list(tmp_path.glob(".memorypalace-restore-*"))
+    restore(archive, target)
+    assert Engine(target).source(sid, content=True).read_bytes() == accepted
+
+    # A valid backup made by an older build could itself contain orphan blobs.
+    with tarfile.open(archive) as stored:
+        database = stored.extractfile("memory.sqlite3").read()
+    files = {
+        "memory.sqlite3": database,
+        "blobs/" + digest(accepted): accepted,
+        "blobs/" + digest(rejected): rejected,
+    }
+    old_archive = tmp_path / "old-backup.tar.gz"
+    files["manifest.json"] = dumps({
+        "format": "memorypalace-1",
+        "files": {name: digest(content) for name, content in files.items()},
+    }).encode()
+    with tarfile.open(old_archive, "w:gz") as stored:
+        for name, content in files.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(content)
+            stored.addfile(info, io.BytesIO(content))
+    before = old_archive.read_bytes()
+    old_target = tmp_path / "restored-old"
+    restore(old_archive, old_target)
+    assert (old_target / "blobs" / digest(accepted)).read_bytes() == accepted
+    assert not (old_target / "blobs" / digest(rejected)).exists()
+    assert old_archive.read_bytes() == before
+
+
+def test_restore_rejects_archive_without_authoritative_database(tmp_path):
+    archive = tmp_path / "missing-db.tar.gz"
+    manifest = dumps({"format": "memorypalace-1", "files": {}}).encode()
+    with tarfile.open(archive, "w:gz") as stored:
+        info = tarfile.TarInfo("manifest.json")
+        info.size = len(manifest)
+        stored.addfile(info, io.BytesIO(manifest))
+    target = tmp_path / "restored"
+    with pytest.raises(ValueError, match="no database"):
+        restore(archive, target)
+    assert not target.exists() or not any(target.iterdir())
+
+    empty = tmp_path / "empty-db.tar.gz"
+    database = b""
+    manifest = dumps({"format": "memorypalace-1", "files": {"memory.sqlite3": digest(database)}}).encode()
+    with tarfile.open(empty, "w:gz") as stored:
+        for name, content in (("manifest.json", manifest), ("memory.sqlite3", database)):
+            info = tarfile.TarInfo(name)
+            info.size = len(content)
+            stored.addfile(info, io.BytesIO(content))
+    with pytest.raises(ValueError, match="database schema"):
+        restore(empty, target)
+    assert not target.exists() or not any(target.iterdir())
 
 
 def test_migration_cli_requires_explicit_target():

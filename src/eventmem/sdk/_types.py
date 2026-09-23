@@ -21,7 +21,7 @@ class ContextReceipt(TypedDict, total=False):
     scope: Scope
     delivery_id: Required[str]
     body_hash: Required[str]
-    state: Required[Literal['sending', 'unconfirmed', 'accepted']]
+    state: Required[Literal['sending', 'unconfirmed', 'accepted', 'discarded']]
 
 class CreateRecord(TypedDict, total=False):
     record: Required[RecordInput]

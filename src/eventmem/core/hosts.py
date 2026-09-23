@@ -18,6 +18,20 @@ def handle(engine, event, payload, *, receipt_only=False):
         transcript = payload.get("transcript_path")
         if transcript and event in {"end", "compact"}:
             capture_transcript(engine, Path(transcript), session, scope)
+        command_id = payload.get("command_id") or digest([session, event, payload])
+        completed_compaction = (
+            event == "compact" and payload.get("host") == "deepseek-harness"
+        ) or (
+            event == "start"
+            and payload.get("host") in {"claude-code", "codex"}
+            and payload.get("source") in {"compact", "clear"}
+        )
+        if receipt_only and completed_compaction:
+            from .context import complete_compaction
+
+            complete_compaction(engine, session, scope, command_id)
+        if receipt_only and event == "start" and not completed_compaction:
+            return {"session": session, "status": "received"}
         boundary_event = event
         if receipt_only or (
             payload.get("host") in {"claude-code", "codex"} and event == "compact"
@@ -38,8 +52,7 @@ def handle(engine, event, payload, *, receipt_only=False):
                 scope=scope,
                 event=boundary_event,
                 scenario=scenario,
-                command_id=payload.get("command_id")
-                or digest([session, event, payload]),
+                command_id=command_id,
                 checkpoint=payload.get("checkpoint", {}),
             ),
         )

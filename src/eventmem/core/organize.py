@@ -207,6 +207,7 @@ class Organizer:
             if row["revision"] != revision:
                 raise Conflict("Family revision changed")
             data = json.loads(row["data"])
+            previous_members, previous_title = data["members"], data["title"]
             if action == "rollback":
                 old = conn.execute(
                     "SELECT data FROM family_revisions WHERE id=? AND revision=?",
@@ -214,6 +215,8 @@ class Organizer:
                 ).fetchone()
                 if not old:
                     raise Missing("Family revision")
+                # The historical snapshot may point at a different summary.
+                invalidate_summary(self.engine, conn, fid, "Event family rolled back")
                 data = json.loads(old[0])
             elif action == "publish":
                 data["state"] = "published"
@@ -228,7 +231,10 @@ class Organizer:
                 other_data = json.loads(other["data"])
                 data["members"] = sorted(set(data["members"] + other_data["members"]))
                 other_data.update(
-                    state="merged", merged_into=fid, revision=other_data["revision"] + 1
+                    state="merged",
+                    merged_into=fid,
+                    revision=other_data["revision"] + 1,
+                    summary={**other_data.get("summary", {}), "state": "dirty"},
                 )
                 conn.execute(
                     "UPDATE families SET state='merged',revision=?,data=? WHERE id=?",
@@ -238,6 +244,7 @@ class Organizer:
                     "INSERT INTO family_revisions VALUES(?,?,?)",
                     (target, other_data["revision"], dumps(other_data)),
                 )
+                invalidate_summary(self.engine, conn, target, "Event family merged")
             elif action in {"revise", "split"}:
                 if members is None:
                     raise ValueError("Members required")
@@ -304,6 +311,13 @@ class Organizer:
                     "INSERT INTO members VALUES(?,?,?)",
                     (fid, rid, dumps({"basis": action})),
                 )
+            if (
+                data["members"] != previous_members
+                or data["title"] != previous_title
+                or data["state"] in {"archived", "merged"}
+                or action == "rollback"
+            ):
+                invalidate_summary(self.engine, conn, fid, "Event family changed")
             self.engine.db.bump(conn)
             return data
 
@@ -368,6 +382,27 @@ class Organizer:
             "limit": limit,
             "layout": "precomputed" if positions else "deterministic",
         }
+
+
+def invalidate_summary(engine, conn, family_id, reason):
+    """Withdraw the current summary while retaining its sourced revision history."""
+    row = conn.execute("SELECT data FROM families WHERE id=?", (family_id,)).fetchone()
+    if not row:
+        raise Missing(family_id)
+    family = json.loads(row[0])
+    summary = family.get("summary", {})
+    if summary.get("state") != "dirty":
+        family["summary"] = {**summary, "state": "dirty"}
+        conn.execute("UPDATE families SET data=? WHERE id=?", (dumps(family), family_id))
+    rid = summary.get("record_id")
+    if rid:
+        try:
+            record = engine._get(conn, rid)
+        except Missing:
+            return
+        if record["status"] == "active":
+            record["status"] = "unverified"
+            engine._save_revision(conn, record, "summary_invalidated", reason)
 
 
 def invalidate_membership(conn, record_id):
@@ -505,7 +540,8 @@ def prepare_summary(engine, payload):
     chunks = summary_chunks(records)
     config = engine.settings("models").get("summary", {})
     part_ids = [
-        "mem_" + digest(["summary-part-v2", family["scope"], config, chunk])[:32]
+        "mem_"
+        + digest(["summary-part-v2", family["scope"], family["title"], config, chunk])[:32]
         for chunk in chunks
     ]
     if len(chunks) > 1:
@@ -789,6 +825,8 @@ def prepare_events(engine, scope):
                     "INSERT OR IGNORE INTO members VALUES(?,?,?)",
                     (fid, rid, '{"basis":"semantic"}'),
                 )
+            if current:
+                invalidate_summary(engine, conn, fid, "Event membership changed")
         for record in records:
             conn.execute(
                 "DELETE FROM dirty WHERE record_id=? AND revision=?",

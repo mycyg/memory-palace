@@ -78,10 +78,23 @@ export class Client {
 export interface DeliveryStore {
   transaction<T>(
     callback: (tx: {
-      has(id: string): Promise<boolean>;
+      get(id: string): Promise<unknown | undefined>;
       put(id: string, body: unknown): Promise<void>;
     }) => Promise<T>,
   ): Promise<T>;
+}
+function sameBody(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (!left || !right || typeof left !== "object" || typeof right !== "object")
+    return false;
+  if (Array.isArray(left) || Array.isArray(right))
+    return Array.isArray(left) && Array.isArray(right) &&
+      left.length === right.length && left.every((item, i) => sameBody(item, right[i]));
+  const prior = left as Record<string, unknown>;
+  const next = right as Record<string, unknown>;
+  const keys = Object.keys(prior);
+  return keys.length === Object.keys(next).length &&
+    keys.every(key => Object.hasOwn(next, key) && sameBody(prior[key], next[key]));
 }
 export async function acceptDelivery(
   store: DeliveryStore,
@@ -89,7 +102,12 @@ export async function acceptDelivery(
   effect: (tx: unknown, delivery: { id: string }) => Promise<void>,
 ) {
   return store.transaction(async (tx) => {
-    if (await tx.has(delivery.id)) return false;
+    const existing = await tx.get(delivery.id);
+    if (existing !== undefined) {
+      if (!sameBody(existing, delivery))
+        throw new Error("Delivery ID belongs to a different body");
+      return false;
+    }
     await effect(tx, delivery);
     await tx.put(delivery.id, delivery);
     return true;

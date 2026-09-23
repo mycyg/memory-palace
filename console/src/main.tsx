@@ -63,9 +63,9 @@ function App() {
   const [busy, setBusy] = useState(false);
   const scopeQuery = { project: scope.project, persona: scope.persona, collection: scope.collection, world: scope.world };
 
-  const execute = useCallback(async (work: () => Promise<unknown>, success = "已保存") => {
+  const execute = useCallback(async (work: () => Promise<unknown>, success: string | ((result: any) => string) = "已保存") => {
     setBusy(true); setError("");
-    try { await work(); setNotice(success); }
+    try { const result = await work(); setNotice(typeof success === "function" ? success(result) : success); }
     catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
     finally { setBusy(false); }
   }, []);
@@ -276,9 +276,9 @@ function App() {
           {["scheduled", "queued", "paused"].includes(item.state) && <div className="actions">
             {(["cancel", item.state === "paused" ? "resume" : "pause"] as string[]).map(action => <button className="quiet" key={action} onClick={() => void execute(async () => {
               const result: any = await request("/v1/reminders/" + encodeURIComponent(item.id), { method: "POST", body: { expected_revision: item.revision, action } });
-              if (result.reconciliation_required) setNotice("可能已发送；请按投递 ID 核对回执");
               await load("reminders");
-            })}>{action === "cancel" ? "取消" : action === "resume" ? "恢复" : "暂停"}</button>)}
+              return result;
+            }, result => result.reconciliation_required ? "可能已发送；请按投递 ID 核对回执" : "已保存")}>{action === "cancel" ? "取消" : action === "resume" ? "恢复" : "暂停"}</button>)}
           </div>}
         </article>)}{!reminders.items.length && <p className="empty">当前没有已安排的提醒。</p>}</div>
       </section><section className="panel"><h2>安排提醒</h2><form onSubmit={e => { e.preventDefault(); const form = e.currentTarget; void execute(async () => {
