@@ -263,6 +263,48 @@ class Page(Model):
     cursor: str | None = None
 
 
+class MaintenanceSettings(Model):
+    concurrency: int = Field(default=2, ge=1)
+    job_timeout_seconds: float = Field(
+        default=300, ge=0.1, le=3600, allow_inf_nan=False
+    )
+    interval_seconds: float = Field(default=60, ge=30, le=86400, allow_inf_nan=False)
+
+
+class RankingSettings(Model):
+    use_weight: float = Field(default=0, ge=0, allow_inf_nan=False)
+    half_life_days: float | None = Field(default=30, ge=0, allow_inf_nan=False)
+
+
+class BudgetSettings(Model):
+    startup: int = Field(default=2000, ge=0, le=128000)
+    passive: int = Field(default=256, ge=0, le=128000)
+    cumulative: int = Field(default=12000, ge=0, le=128000)
+
+
+class ScenarioSettings(Model):
+    preferred_kinds: list[Kind] = Field(default_factory=list)
+    max_rounds: int = Field(default=3, ge=0)
+
+
+def validate_settings(key, value):
+    """Validate once before persistence, including direct Python callers."""
+    if not isinstance(value, dict):
+        raise ValueError("Settings must be an object")
+    schema = {"maintenance": MaintenanceSettings, "ranking": RankingSettings}.get(key)
+    if schema:
+        return schema.model_validate(value, strict=True).model_dump(exclude_unset=True)
+    schema = {"budgets": BudgetSettings, "scenarios": ScenarioSettings}.get(key)
+    if schema:
+        return {
+            name: schema.model_validate(config, strict=True).model_dump(
+                exclude_unset=True
+            )
+            for name, config in value.items()
+        }
+    return value
+
+
 class Result(Model):
     id: str
     revision: int

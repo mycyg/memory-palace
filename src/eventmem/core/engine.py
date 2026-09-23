@@ -141,8 +141,7 @@ class Engine:
                     | ({STAMP: origin} if origin else {}),
                 )
                 self._insert(conn, record)
-                if source.kind in {"knowledge", "checkpoint"}:
-                    self.supersede_source_versions(conn, sid)
+                self.supersede_source_versions(conn, sid)
                 conn.execute(
                     "UPDATE sources SET mechanical='complete' WHERE id=?", (sid,)
                 )
@@ -624,10 +623,26 @@ class Engine:
             raise Conflict("Cross-scope relations are not allowed")
         rid = "rel_" + digest([subject, predicate, object_])[:32]
         scope = Scope(**left["scope"]).key()
-        conn.execute(
-            "INSERT INTO relations VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data",
+        changed = conn.execute(
+            "INSERT INTO relations VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data WHERE relations.data!=excluded.data",
             (rid, subject, predicate, object_, scope, dumps(attributes)),
-        )
+        ).rowcount
+        if changed and predicate in {"counterexample", "refutes", "verifies"}:
+            for record in {left["id"]: left, right["id"]: right}.values():
+                if record["kind"] == "procedure":
+                    record["attributes"]["review_required"] = True
+                    self._save_revision(
+                        conn,
+                        record,
+                        "procedure_evidence",
+                        "New result or counterexample",
+                    )
+                    self.enqueue(
+                        "procedure_review",
+                        {"record_id": record["id"], "revision": record["revision"]},
+                        f"procedure-review:{record['id']}:{record['revision']}",
+                        conn=conn,
+                    )
         return {
             "id": rid,
             "subject": subject,
@@ -652,23 +667,6 @@ class Engine:
             raise ValueError("Unknown relationship")
         with self.db.connect(write=True) as conn:
             result = self._relation(conn, subject, predicate, object_, attributes or {})
-            if predicate in {"counterexample", "refutes", "verifies"}:
-                for rid in {subject, object_}:
-                    record = self._get(conn, rid)
-                    if record["kind"] == "procedure":
-                        record["attributes"]["review_required"] = True
-                        self._save_revision(
-                            conn,
-                            record,
-                            "procedure_evidence",
-                            "New result or counterexample",
-                        )
-                        self.enqueue(
-                            "procedure_review",
-                            {"record_id": rid, "revision": record["revision"]},
-                            f"procedure-review:{rid}:{record['revision']}",
-                            conn=conn,
-                        )
             self.db.bump(conn)
             return result
 
@@ -905,6 +903,10 @@ class Engine:
             for job in conn.execute("SELECT id,payload FROM jobs").fetchall():
                 if references_deleted(json.loads(job["payload"])):
                     conn.execute(
+                        "UPDATE job_recovery SET target='[deleted]',prev_error=NULL WHERE job_id=?",
+                        (job["id"],),
+                    )
+                    conn.execute(
                         "UPDATE jobs SET state='canceled',payload='{}',error=NULL,owner=NULL,lease_until=NULL,fence=fence+1 WHERE id=?",
                         (job["id"],),
                     )
@@ -981,26 +983,36 @@ class Engine:
         return jid
 
     def settings(self, key, value=None):
+        if value is not None:
+            from .models import validate_settings
+
+            value = validate_settings(key, value)
         with self.db.connect(write=value is not None) as conn:
+            row = conn.execute(
+                "SELECT data FROM settings WHERE key=?", (key,)
+            ).fetchone()
+            previous = json.loads(row[0]) if row else {}
             if value is not None:
                 conn.execute(
                     "INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET data=excluded.data",
                     (key, dumps(value)),
                 )
                 self.db.bump(conn)
-                if key == "models":
-                    conn.execute(
-                        "UPDATE families SET data=json_set(data,'$.summary.state','dirty') WHERE state NOT IN ('archived','merged')"
-                    )
+                if key == "models" and value.get("summary") != previous.get("summary"):
+                    from .organize import invalidate_summary
+
+                    for family in conn.execute(
+                        "SELECT id FROM families WHERE state NOT IN ('archived','merged')"
+                    ).fetchall():
+                        invalidate_summary(
+                            self, conn, family["id"], "Model configuration changed"
+                        )
                 # Explicit configuration changes make pending model jobs retryable.
                 conn.execute(
                     "UPDATE jobs SET state='pending',available=? WHERE state='waiting_config'",
                     (time.time(),),
                 )
-            row = conn.execute(
-                "SELECT data FROM settings WHERE key=?", (key,)
-            ).fetchone()
-            return json.loads(row[0]) if row else {}
+            return value if value is not None else previous
 
     def feedback(self, rid, type_, session="", attributes=None, key=None):
         if type_ not in {

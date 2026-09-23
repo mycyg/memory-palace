@@ -478,7 +478,8 @@ def recall(engine, request: RecallRequest):
         pending = [
             d
             for d in state.get("deliveries", {}).values()
-            if d["epoch"] == state.get("epoch") and d["state"] != "accepted"
+            if d["epoch"] == state.get("epoch")
+            and d["state"] not in {"accepted", "discarded"}
         ]
         # Reserve unresolved append deliveries without pretending they were received.
         reserved = sum(d["tokens"] for d in pending)

@@ -7,6 +7,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from uuid import uuid4
 
 import httpx
 
@@ -68,7 +69,16 @@ def normalize(raw, *, scope=None, scenario="tool"):
         )
     # Exclude transcript_path: Codex's JSONL format is not a stable hook API,
     # and includes injected context that must never become user evidence.
-    payload["command_id"] = digest([name, payload])
+    completed_compaction = name == "SessionStart" and payload.get("source") in {
+        "compact", "clear"
+    }
+    if completed_compaction:
+        native_id = raw.get("command_id")
+        payload["command_id"] = (
+            native_id if isinstance(native_id, str) and native_id else uuid4().hex
+        )
+    else:
+        payload["command_id"] = digest([name, payload])
     return EVENTS[name], payload
 
 

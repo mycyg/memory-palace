@@ -32,7 +32,7 @@ A session boundary can record a checkpoint with goals, confirmed progress, unver
 
 A host may send message and tool observations through a service plugin. The plugin keeps a bounded local spool during service interruption and retries receipt with stable identities. Replayed observations are records of what the host saw; they do not by themselves consume the live context budget or prove the host completed a task.
 
-Automatic event grouping works on a bounded set of changed, source-backed records and reuses the existing family and member structures. Summaries split evidence into input batches of at most 6,000 tokens and reject output above 2,000 tokens. A family summary is refreshed when member revisions or the configured summary model change; the original sources remain readable.
+Automatic event grouping works on a bounded set of changed, source-backed records and reuses the existing family and member structures. Summaries split evidence into input batches of at most 6,000 tokens and reject output above 2,000 tokens. Changing a family's members or title, a member revision, or the configured summary model withdraws the previous summary from current recall until it is regenerated; its sourced revision history remains available. Summary-part reuse includes the title supplied to the model. The original sources remain readable.
 
 ## Processing and retrieval
 
@@ -40,7 +40,7 @@ Receipt commits the source before any optional model work begins. Persistent job
 
 Recall combines exact cues and SQLite full-text search with any configured vector and relation candidates. Every returned record is checked against scope, revision, status, time, and evidence policy after candidate generation. A token budget bounds assembled context; `fast` favors bounded latency and `deep` can examine a wider lexical set. The API also provides bounded reads of records, source snapshots, revisions, attachments, and processing state.
 
-Session recall prepares a context delivery ID and body hash. Preparation does not consume the session's context budget. The host reports `sending`, `unconfirmed`, or `accepted` to `POST /v1/context/receipts`; only acceptance of the exact body updates the budget and seen-record ledger. A compaction boundary starts a new context window. A session boundary can also report `foreground_seconds` (up to one hour) so background jobs yield while foreground work is active.
+Session recall prepares a context delivery ID and body hash. Preparation reserves capacity without counting the text as received. The host reports `sending`, `unconfirmed`, `accepted`, or `discarded` to `POST /v1/context/receipts`; only acceptance of the exact body updates the budget and seen-record ledger. A confirmed native discard releases the reservation; a timeout or missing receipt does not. A compaction boundary starts a new context window. A session boundary can also report `foreground_seconds` (up to one hour) so background jobs yield while foreground work is active.
 
 ## Optional facilities
 

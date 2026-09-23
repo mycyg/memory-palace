@@ -6,6 +6,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from uuid import uuid4
 
 from .codex import deliver
 
@@ -23,6 +24,11 @@ def run(event: str, payload: dict, *, root: Path, url: str) -> dict:
     if event not in HOOK_NAMES:
         return {}
     observation = {**payload, "host": "claude-code", "scenario": "tool"}
+    if event == "start" and observation.get("source") in {"compact", "clear"}:
+        native_id = observation.get("command_id")
+        observation["command_id"] = (
+            native_id if isinstance(native_id, str) and native_id else uuid4().hex
+        )
     result = deliver(event, observation, root=root, url=url)
     context = result.get("text")
     if not isinstance(context, str) or not context or event not in {"start", "pre_action", "tool", "message"}:
