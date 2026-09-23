@@ -75,7 +75,16 @@ class Engine:
                 "SELECT * FROM sources WHERE id=?", (sid,)
             ).fetchone()
             if previous:
-                if previous["hash"] != hash_:
+                supplied = source.model_dump(exclude={"text", "occurred_at"})
+                stored = json.loads(previous["data"])
+                if (
+                    previous["hash"] != hash_
+                    or any(stored.get(key) != value for key, value in supplied.items())
+                    or (
+                        "occurred_at" in source.model_fields_set
+                        and previous["occurred_at"] != source.occurred_at
+                    )
+                ):
                     raise Conflict("Source changed: provide a new version")
                 return self._source(previous)
             stamp = now()
@@ -480,6 +489,22 @@ class Engine:
             "SELECT record_id FROM dependencies WHERE evidence_id=?", (data["id"],)
         ).fetchall():
             child = self._get(conn, row[0])
+            if (
+                child["kind"] == "procedure"
+                and data["id"] in child["attributes"].get("review_evidence", [])
+                and not child["attributes"].get("review_required")
+            ):
+                child["attributes"]["review_required"] = True
+                self._save_revision(
+                    conn, child, "procedure_evidence", "Reviewed outcome changed"
+                )
+                self.enqueue(
+                    "procedure_review",
+                    {"record_id": child["id"], "revision": child["revision"]},
+                    f"procedure-review:{child['id']}:{child['revision']}",
+                    conn=conn,
+                )
+                continue
             if child["generated"] and child["status"] == "active":
                 child["status"] = "unverified"
                 child["attributes"]["stale_evidence"] = data["id"]

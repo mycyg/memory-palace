@@ -249,6 +249,9 @@ def test_procedure_counterexample_rechecks_and_real_usage_dedup(tmp_path, monkey
     )
     engine.relate(rid, "counterexample", outcome)
     assert engine.get(rid)["attributes"]["review_required"]
+    assert (
+        "review required" in engine.recall(RecallRequest(query="retry"))["text"].lower()
+    )
 
     def review(*args, **kwargs):
         return {
@@ -261,6 +264,20 @@ def test_procedure_counterexample_rechecks_and_real_usage_dedup(tmp_path, monkey
     drain(engine)
     assert not engine.get(rid)["attributes"]["review_required"]
     assert engine.get(rid)["attributes"]["review_basis"] == "model_inference"
+    assert (
+        "Unknown delivery must be reconciled."
+        in engine.recall(RecallRequest(query="retry"))["text"]
+    )
+    engine.revise(
+        outcome,
+        RevisionInput(
+            expected_revision=1,
+            command_id="result-correction",
+            action="correct",
+            content="The receiver actually deduplicated the retry.",
+        ),
+    )
+    assert engine.get(rid)["attributes"]["review_required"]
     engine.feedback(rid, "read", "input-1")
     engine.feedback(rid, "verified", "input-1")
     engine.recall(RecallRequest(query="retry", session="passive", phase="passive"))
@@ -417,3 +434,16 @@ def test_summary_serialized_batch_budget(tmp_path):
     chunks = summary_chunks([engine.get(rid)])
     assert len(chunks) > 1
     assert all(tokens(dumps(chunk)) <= 6000 for chunk in chunks)
+
+
+def test_source_identity_includes_provenance_changes(tmp_path):
+    engine = Engine(tmp_path)
+    source = SourceInput(
+        namespace="adapter", key="one", text="Task completed.", authority="model"
+    )
+    first = engine.receive(source)
+    assert engine.receive(source)["id"] == first["id"]
+    with pytest.raises(Conflict, match="new version"):
+        engine.receive(source.model_copy(update={"authority": "operation"}))
+    with pytest.raises(Conflict, match="new version"):
+        engine.receive(source.model_copy(update={"metadata": {"result": "accepted"}}))

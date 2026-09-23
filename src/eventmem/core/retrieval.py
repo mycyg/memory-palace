@@ -512,6 +512,17 @@ def recall(engine, request: RecallRequest):
                 trace["filtered"].append({"id": rid, "reason": "already_injected"})
                 continue
             body = data["content"]
+            if data["kind"] == "procedure":
+                attributes = data["attributes"]
+                if attributes.get("review_required"):
+                    body = "[Method review required after new evidence] " + body
+                elif attributes.get("applicability"):
+                    body += (
+                        "\nApplicability (model inference): "
+                        + attributes["applicability"]
+                    )
+                    if attributes.get("limitations"):
+                        body += "\nLimitations: " + attributes["limitations"]
             # What is not experience is named by its class, never by the word `explicit`.
             prefix = (
                 f"[{rid} r{revision} {data['kind']} {data['status']}] "

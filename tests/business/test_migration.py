@@ -10,6 +10,7 @@ import pytest
 
 from eventmem.core import Engine
 from eventmem.core.db import Conflict, Missing, digest, dumps
+from eventmem.core.jobs import Worker
 from eventmem.core.models import Scope
 from eventmem.core.transfer import migrate
 
@@ -78,7 +79,9 @@ def _old_sqlite(root: Path) -> tuple[str, str]:
         conn.execute("INSERT INTO tombstones VALUES(?,?)", ("mem_deleted", STAMP))
         conn.execute("INSERT INTO tombstones VALUES(?,?)", ("src_deleted", STAMP))
         conn.execute("INSERT INTO jobs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
-            "job_original", "summary", "old-job", "{}", "running", 1, 5, 0, 9999999999,
+            "job_original", "summary", "old-job",
+            dumps({"scope": Scope().model_dump(), "since": STAMP, "title": "Old summary"}),
+            "running", 1, 5, 0, 9999999999,
             "old-worker", 1, None, STAMP, STAMP,
         ))
         conn.execute("INSERT INTO outbox VALUES(?,?,?,?,?,?,?)", (
@@ -115,6 +118,7 @@ def test_sqlite_migration_keeps_identity_history_deletion_and_unfinished_work(tm
     report = migrate(source, target)
     assert report["format"] == "sqlite-v1"
     assert report["running_jobs_requeued"] == 1
+    assert report["legacy_summary_jobs_converted"] == 1
     assert report["sending_deliveries_uncertain"] == 1
     assert (source / "memory.sqlite3").read_bytes() == before
     assert (target / "host-spool" / "pending.json").exists()
@@ -127,12 +131,70 @@ def test_sqlite_migration_keeps_identity_history_deletion_and_unfinished_work(tm
         migrated.get("mem_deleted")
     with migrated.db.connect() as conn:
         assert {r[0] for r in conn.execute("SELECT key FROM tombstones")} == {"mem_deleted", "src_deleted"}
-        assert conn.execute("SELECT state FROM jobs WHERE id='job_original'").fetchone()[0] == "pending"
+        job = conn.execute("SELECT kind,state,payload FROM jobs WHERE id='job_original'").fetchone()
+        assert (job["kind"], job["state"]) == ("event_summary", "pending")
+        assert json.loads(job["payload"])["legacy_payload"]["title"] == "Old summary"
         assert conn.execute("SELECT state FROM outbox WHERE id='delivery_original'").fetchone()[0] == "uncertain"
         assert conn.execute("SELECT COUNT(*) FROM search WHERE id=?", (rid,)).fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM jobs WHERE kind='embed' AND state='pending'").fetchone()[0] == 1
         assert json.loads(conn.execute("SELECT data FROM vector_indexes").fetchone()[0])["state"] == "pending"
     assert (target / "blobs" / digest(b"original attachment\n")).read_bytes() == b"original attachment\n"
+
+
+def test_sqlite_migration_adapts_old_summary_and_settles_retired_jobs(tmp_path, monkeypatch):
+    source = tmp_path / "old"
+    sid, rid = _old_sqlite(source)
+    with sqlite3.connect(source / "memory.sqlite3") as conn:
+        conn.execute("INSERT INTO jobs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
+            "job_empty", "summary", "old-empty",
+            dumps({"scope": Scope(project="absent").model_dump(), "since": STAMP}),
+            "pending", 0, 5, 0, None, None, 0, None, STAMP, STAMP,
+        ))
+        for kind, state in zip(
+            ("diary", "portrait", "self_narrative", "prediction"),
+            ("pending", "retry", "waiting_config", "running"),
+        ):
+            conn.execute("INSERT INTO jobs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
+                "job_" + kind, kind, "old-" + kind, dumps({"scope": Scope().model_dump()}),
+                state, 0, 5, 0, 9999999999 if state == "running" else None,
+                "old-worker" if state == "running" else None, 0, None, STAMP, STAMP,
+            ))
+    target = tmp_path / "new"
+    report = migrate(source, target)
+    assert report["legacy_summary_jobs_converted"] == 1
+    assert report["legacy_summary_jobs_empty"] == 1
+    assert report["retired_job_counts"] == {
+        "diary": 1, "portrait": 1, "self_narrative": 1, "prediction": 1,
+    }
+    assert report["running_jobs_requeued"] == 2
+    engine = Engine(target)
+    with engine.db.connect() as conn:
+        assert conn.execute("SELECT state FROM jobs WHERE id='job_empty'").fetchone()[0] == "complete"
+        for kind in report["retired_job_counts"]:
+            row = conn.execute("SELECT state,error,payload FROM jobs WHERE id=?", ("job_" + kind,)).fetchone()
+            assert row["state"] == "canceled"
+            assert "Retired in MemoryPalace 2.0" in row["error"]
+            assert json.loads(row["payload"])["scope"] == Scope().model_dump()
+        converted = conn.execute("SELECT payload FROM jobs WHERE id='job_original'").fetchone()
+        fid = json.loads(converted["payload"])["family_id"]
+        family = json.loads(conn.execute("SELECT data FROM families WHERE id=?", (fid,)).fetchone()[0])
+        assert family["members"] == [rid]
+        assert family["title"] == "Old summary"
+
+    def no_model_call(*args, **kwargs):
+        raise AssertionError("A one-record migrated summary must not call a model")
+
+    monkeypatch.setattr("eventmem.core.providers.Providers.json", no_model_call)
+    assert Worker(engine).run_once()
+    with engine.db.connect() as conn:
+        assert conn.execute("SELECT state FROM jobs WHERE id='job_original'").fetchone()[0] == "complete"
+        summary = conn.execute(
+            "SELECT data FROM records WHERE kind='summary' AND deleted=0 AND json_extract(data,'$.generated')=1"
+        ).fetchone()
+        assert summary
+        data = json.loads(summary[0])
+        assert data["source_ids"] == [sid]
+        assert data["evidence_ids"] == [rid]
 
 
 def test_sqlite_migration_rejects_missing_attachment_without_partial_target(tmp_path):

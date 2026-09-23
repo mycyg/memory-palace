@@ -14,7 +14,7 @@ import yaml
 from .db import Conflict, digest, dumps
 from .engine import Engine
 from .legacy_reader import archived_ids, event_from_markdown
-from .models import RecordInput, Scope, SourceInput
+from .models import RecordInput, Scope, SourceInput, now
 
 
 def migrate(legacy: Path, target: Path, scope: Scope | None = None):
@@ -126,6 +126,7 @@ def _migrate_sqlite(database: Path, source_root: Path, stage: Path) -> dict:
         running = conn.execute("SELECT COUNT(*) FROM jobs WHERE state='running'").fetchone()[0]
         sending = conn.execute("SELECT COUNT(*) FROM outbox WHERE state='sending'").fetchone()[0]
         conn.execute("UPDATE jobs SET state='pending',owner=NULL,lease_until=NULL,available=?,fence=fence+1 WHERE state='running'", (time.time(),))
+        legacy_jobs = _adapt_legacy_jobs(engine, conn)
         conn.execute("UPDATE outbox SET state='uncertain',lease_until=NULL WHERE state='sending'")
         conn.execute("DELETE FROM search")
         conn.execute("DELETE FROM prefetch")
@@ -145,9 +146,99 @@ def _migrate_sqlite(database: Path, source_root: Path, stage: Path) -> dict:
         **counts,
         "attachments": len(blobs),
         "running_jobs_requeued": running,
+        **legacy_jobs,
         "sending_deliveries_uncertain": sending,
         "derived_indexes": "lexical rebuilt; vector embeddings queued",
         "integrity": "ok",
+    }
+
+
+def _adapt_legacy_jobs(engine: Engine, conn: sqlite3.Connection) -> dict:
+    """Translate only unfinished v1 jobs; the v2 worker has no legacy aliases."""
+    active = ("pending", "retry", "waiting_config")
+    converted = empty = invalid = 0
+    retired = {kind: 0 for kind in ("diary", "portrait", "self_narrative", "prediction")}
+    for job in conn.execute(
+        "SELECT id,kind,payload FROM jobs WHERE state IN (?,?,?) "
+        "AND kind IN ('summary','diary','portrait','self_narrative','prediction') ORDER BY id",
+        active,
+    ).fetchall():
+        jid, kind = job["id"], job["kind"]
+        if kind != "summary":
+            retired[kind] += 1
+            conn.execute(
+                "UPDATE jobs SET state='canceled',owner=NULL,lease_until=NULL,error=?,updated_at=? WHERE id=?",
+                ("Retired in MemoryPalace 2.0; not executed during migration", now(), jid),
+            )
+            continue
+        try:
+            old_payload = json.loads(job["payload"])
+            scope = Scope.model_validate(old_payload["scope"])
+            since = old_payload.get("since", "")
+            if not isinstance(since, str):
+                raise TypeError("Invalid since value")
+        except (KeyError, TypeError, ValueError):
+            invalid += 1
+            conn.execute(
+                "UPDATE jobs SET state='canceled',owner=NULL,lease_until=NULL,error=?,updated_at=? WHERE id=?",
+                ("Invalid legacy summary payload; not executed during migration", now(), jid),
+            )
+            continue
+        from .read_policy import ReadPolicy
+
+        policy = ReadPolicy.load(engine, scope, "experience_recall", conn=conn)
+        members = []
+        offset = 0
+        while len(members) < 100:
+            rows = conn.execute(
+                "SELECT r.id,r.data FROM records r WHERE r.scope=? AND r.deleted=0 "
+                "AND r.status='active' AND r.updated_at>=? "
+                "AND COALESCE(json_extract(r.data,'$.generated'),0)=0 "
+                "AND EXISTS(SELECT 1 FROM evidence e JOIN sources s ON s.id=e.source_id "
+                "WHERE e.record_id=r.id AND s.deleted=0) "
+                "ORDER BY r.updated_at DESC,r.id LIMIT 100 OFFSET ?",
+                (scope.key(), since, offset),
+            ).fetchall()
+            if not rows:
+                break
+            members.extend(
+                row["id"] for row in rows if policy.visible(json.loads(row["data"]))
+            )
+            offset += len(rows)
+        members = members[:100]
+        if not members:
+            empty += 1
+            conn.execute(
+                "UPDATE jobs SET state='complete',owner=NULL,lease_until=NULL,error=NULL,updated_at=? WHERE id=?",
+                (now(), jid),
+            )
+            continue
+        fid = "event_" + digest(["migrated-summary", jid])[:24]
+        data = {
+            "id": fid, "scope": scope.model_dump(), "kind": "event", "state": "candidate",
+            "revision": 1, "title": str(old_payload.get("title") or "Legacy summary")[:1000],
+            "members": sorted(members), "positions": {},
+            "basis": "Migrated unfinished summary job", "summary": {"state": "dirty"},
+        }
+        conn.execute(
+            "INSERT INTO families(id,scope,kind,state,revision,data) VALUES(?,?,?,?,?,?)",
+            (fid, scope.key(), "event", "candidate", 1, dumps(data)),
+        )
+        conn.execute("INSERT INTO family_revisions VALUES(?,?,?)", (fid, 1, dumps(data)))
+        conn.executemany(
+            "INSERT INTO members VALUES(?,?,?)",
+            [(fid, rid, dumps({"basis": "migration"})) for rid in data["members"]],
+        )
+        conn.execute(
+            "UPDATE jobs SET kind='event_summary',payload=?,owner=NULL,lease_until=NULL,error=NULL,updated_at=? WHERE id=?",
+            (dumps({"family_id": fid, "legacy_payload": old_payload}), now(), jid),
+        )
+        converted += 1
+    return {
+        "legacy_summary_jobs_converted": converted,
+        "legacy_summary_jobs_empty": empty,
+        "legacy_summary_jobs_invalid": invalid,
+        "retired_job_counts": retired,
     }
 
 
